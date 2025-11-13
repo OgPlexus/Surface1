@@ -1,0 +1,1454 @@
+---
+title: "Analyses_Surfaces"
+output: html_document
+date: "2025-08-11"
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo   =FALSE,      
+                      include=TRUE ,     
+                      message=FALSE,      
+                      warning=FALSE,      
+                      comment=NA,         
+                      fig.align="center", 
+                      fig.height = 5,     
+                      fig.widht = 5      
+                      )
+```
+
+
+```{r}
+# Load packages
+library(readr)      
+library(tidyverse)
+library(xtable)
+library(readxl)       
+library(dplyr)      
+library(ggplot2)     
+library(tidyr)       
+library(purrr)       
+library(stringr)     
+library(forcats)     
+library(broom)       
+library(knitr)       
+library(kableExtra)  
+library(ggpubr)
+library(rstatix)
+library(car) 
+library(scales) 
+library(mgcv)
+library(brms)
+library(patchwork)
+```
+
+```{r}
+# Load the processed data
+reproduction <- readRDS("Data/Processed_Data/reproduction.rds") # This is for reproduction
+surfaces <- readRDS("Data/Processed_Data/surfaces.rds") # This is for survival 
+merged_data <- readRDS("Data/Processed_Data/merged_data.rds")
+```
+
+
+```{r data-overview, echo=FALSE, message=FALSE, warning=FALSE}
+#function to create data structure overview
+create_data_overview <- function(data, dataset_name) {
+  data.frame(
+    Variable = names(data),
+    Type = sapply(data, class)
+  ) %>%
+    kable(caption = dataset_name) %>%
+    kable_styling(full_width = FALSE, 
+                  bootstrap_options = "striped",
+                  position = "left")
+}
+
+# Show structure of both datasets
+create_data_overview(reproduction, "Reproduction Dataset Structure")
+create_data_overview(surfaces, "Surfaces Dataset Structure")
+```
+
+
+```{r survival-plot, echo=FALSE, fig.height=5, fig.width=7, message=FALSE, warning=FALSE}
+#Define custom colors
+custom_colors <- c("Control" = "#1f77b4",
+                   "Copper" = "#ff7f0e",
+                   "Plastic" = "#2ca02c",
+                   "Steel" = "#9932CC")
+
+phagesurvivalPlot <- ggplot(surfaces, aes(x = Time, y = log10(VirusTiter), color = Surface, shape = Surface)) +
+  geom_point(size = 3, alpha = 0.7) +
+  geom_line(aes(group = interaction(Surface, Experiment)), alpha = 0.3) +
+  facet_grid(PhageType ~ Temperature, scales = "free_y",
+             labeller = labeller(Temperature = function(x) paste0(x, "C"))) +
+  scale_color_manual(values = custom_colors) +
+  scale_shape_manual(values = c(16, 17, 15, 18)) +
+  labs(#title = "Phage Survival on Different Surfaces and Temperatures",
+       x = "Time (hours)",
+       y = expression(log[10]~"Virus Titer"),
+       color = "Surface",
+       shape = "Surface") +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 16),
+    strip.text = element_text(face = "bold", size = 12),
+    legend.position = "bottom",
+    legend.box = "horizontal",
+    panel.grid.minor = element_blank(),
+    panel.border = element_rect(color = "grey80", fill = NA),
+    axis.text = element_text(color = "black"),
+    axis.title = element_text(face = "bold")
+  ) +
+  guides(color = guide_legend(nrow = 1, override.aes = list(size = 4, alpha = 1)),
+         shape = guide_legend(nrow = 1, override.aes = list(size = 4, alpha = 1)))
+
+#Saving the plot
+png("PhageSurvivalPlot.png", width=6, height=4, units="in", res=300)
+print(phagesurvivalPlot)
+dev.off() #png form
+
+ggsave("PhageSurvivalPlot.pdf", plot = phagesurvivalPlot, width = 6, height = 4, units = "in") #pdf form
+```
+
+
+```{r}
+#  Differences in survival rates for PhiX174 and T4 at different surfaces and temperatures?
+# Filter data for the two temperatures of interest: 4°C and 37°C
+filtered_surfaces <- surfaces %>%
+  filter(Temperature %in% c(4, 37)) %>%
+  mutate(
+    PhageType = factor(PhageType),
+    Surface = factor(Surface),
+    Temperature = factor(Temperature, levels = c("4", "37"))
+  )
+
+# Define a custom color palette for the surfaces
+surface_colors <- c(
+  "Control" = "#1f78b4",
+  "Copper"  = "#e31a1c",
+  "Plastic" = "#33a02c",
+  "Steel"   = "#9932CC"
+)
+
+# Define shapes for surfaces
+surface_shapes <- c(
+  "Control" = 16,
+  "Copper"  = 17,
+  "Plastic" = 15,
+  "Steel"   = 18
+)
+
+# Plot
+T4PhiXComparison <- ggplot(filtered_surfaces, aes(x = Time, y = VirusTiter, color = Surface, shape = Surface)) +
+  geom_point(size = 3, alpha = 0.7) +
+  geom_line(aes(group = interaction(Surface, PhageType, Temperature, Experiment)), alpha = 0.5) +
+  facet_grid(PhageType ~ Temperature, 
+             labeller = labeller(Temperature = function(x) paste0(x, "°C"))) +
+  scale_y_log10("Virus Titer (log scale)") +
+  scale_color_manual(values = surface_colors) +
+  scale_shape_manual(values = surface_shapes) +
+  labs(
+    title = "Survival of PhiX174 vs. T4 at 4°C and 37°C Across Different Surfaces",
+    x = "Time (hours)",
+    color = "Surface",
+    shape = "Surface"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    strip.text = element_text(face = "bold")
+  )
+
+#Saving the plot
+png("T4PhiXComparisonPlot.png", width=6, height=4, units="in", res=300)
+print(T4PhiXComparison)
+dev.off() #png form
+
+ggsave("T4PhiXComparisonPlot.pdf", plot = T4PhiXComparison, width = 6, height = 4, units = "in") #pdf form
+```
+
+
+```{r}
+# Survival rate, assumption checks, 
+# Non-parametric analysis
+# Calculate survival rate relative to initial titer (time 0)
+survival_data <- surfaces %>%
+  group_by(Experiment, PhageType, Temperature, Surface) %>%
+  mutate(
+    InitialTiter = VirusTiter[Time == 0],
+    SurvivalRate = VirusTiter / InitialTiter * 100
+  ) %>%
+  ungroup()
+
+# Function to check normality and homogeneity of variance
+check_assumptions <- function(data, surface) {
+  filtered_data <- data %>%
+    filter(Surface == surface, Time == 8)  # Looking at final timepoint
+  
+  # Shapiro test for each group with error handling
+  normality_tests <- filtered_data %>%
+    group_by(PhageType, Temperature) %>%
+    summarise(
+      n = n(),
+      mean = mean(SurvivalRate),
+      sd = sd(SurvivalRate),
+      shapiro_p = tryCatch(
+        shapiro.test(SurvivalRate)$p.value,
+        error = function(e) NA
+      )
+    ) %>%
+    mutate(
+      normality_status = case_when(
+        is.na(shapiro_p) & sd == 0 ~ "Constant values",
+        is.na(shapiro_p) ~ "Test failed",
+        shapiro_p > 0.05 ~ "Normal",
+        TRUE ~ "Non-normal"
+      )
+    )
+  
+  # Levene's test with error handling
+  levene_result <- tryCatch(
+    car::leveneTest(SurvivalRate ~ interaction(PhageType, Temperature), 
+                    data = filtered_data),
+    error = function(e) "Levene's test failed - likely due to constant values"
+  )
+  
+  list(normality = normality_tests, variance = levene_result)
+}
+```
+
+
+```{r}
+# Create visualization of survival curves
+create_survival_plot <- function(data, surface_name) {
+  ggplot(data %>% filter(Surface == surface_name), 
+         aes(x = Time, y = SurvivalRate + 0.01,  
+             color = interaction(PhageType, Temperature, sep = " "),
+             shape = interaction(PhageType, Temperature, sep = " "))) +
+    stat_summary(fun = mean, geom = "point", size = 2) +
+    stat_summary(fun = mean, geom = "line") +
+    stat_summary(fun.data = mean_se, geom = "errorbar", width = 0.2) +
+    scale_y_log10(labels = scales::label_number()) +
+    labs(
+      x = "Time (hours)", 
+      y = "Survival Rate (%)", 
+      color = "Phage Type & Temperature",
+      shape = "Phage Type & Temperature"
+    ) +
+    theme_pubr() +
+    ggtitle(paste("Virus Survival Rate on", surface_name)) +
+    theme(legend.position = "right")
+}
+
+#Saving the plot
+png("SurvivalPlot.png", width=6, height=4, units="in", res=300)
+print(create_survival_plot)
+dev.off() #png form
+```
+
+
+```{r}
+# Function for non-parametric analysis
+analyze_surface <- function(data, surface_name) {
+  surface_data <- data %>%
+    filter(Surface == surface_name, Time == 8)  
+  
+  # Kruskal-Wallis test for each factor
+  kw_phage <- kruskal.test(SurvivalRate ~ PhageType, data = surface_data)
+  kw_temp <- kruskal.test(SurvivalRate ~ Temperature, data = surface_data)
+  
+  # Wilcoxon rank sum tests for pairwise comparisons
+  pairwise_phage <- pairwise.wilcox.test(
+    surface_data$SurvivalRate,
+    interaction(surface_data$PhageType, surface_data$Temperature),
+    p.adjust.method = "bonferroni"
+  )
+  
+  list(
+    kw_phage = kw_phage,
+    kw_temp = kw_temp,
+    pairwise = pairwise_phage
+  )
+}
+
+# Check assumptions for each surface
+surfaces_list <- unique(surfaces$Surface)
+assumption_results <- lapply(surfaces_list, function(s) check_assumptions(survival_data, s))
+names(assumption_results) <- surfaces_list
+
+# Create plots for each surface
+survival_plots <- lapply(surfaces_list, function(s) create_survival_plot(survival_data, s))
+names(survival_plots) <- surfaces_list
+
+# Perform analysis for each surface
+statistical_results <- lapply(surfaces_list, function(s) analyze_surface(survival_data, s))
+names(statistical_results) <- surfaces_list
+
+# Print results for inspection
+print("Assumption check results:")
+print(assumption_results)
+
+print("Statistical analysis results:")
+print(statistical_results)
+```
+
+
+```{r}
+# # Create survival curve plot
+# survival_plot <- ggplot(survival_data, 
+#                         aes(x = Time, y = SurvivalRate + 0.01, 
+#                             color = PhageType,
+#                             linetype = factor(Temperature),
+#                             shape = PhageType)) +
+#   geom_point(size = 2) +
+#   stat_summary(fun = mean, geom = "line") +
+#   scale_y_log10(labels = scales::label_number()) +
+#   facet_wrap(~Surface, scales = "free_y") +
+#   labs(
+#     x = "Time (hours)",
+#     y = "Survival Rate (%)",
+#     color = "Phage Type",
+#     linetype = "Temperature (°C)",
+#     shape = "Phage Type"
+#   ) +
+#   theme_pubr() +
+#   scale_linetype_manual(values = c("solid", "dashed")) +
+#   theme(
+#     legend.position = "bottom",
+#     strip.background = element_rect(fill = "white"),
+#     strip.text = element_text(face = "bold")
+#   )
+
+# Create summary statistics table
+survival_summary <- survival_data %>%
+  group_by(Surface, PhageType, Temperature) %>%
+  summarise(
+    Initial_Titer = mean(VirusTiter[Time == 0]),
+    Final_Titer = mean(VirusTiter[Time == 8]),
+    Survival_Rate = mean(SurvivalRate[Time == 8]),
+    SD = sd(SurvivalRate[Time == 8])
+  ) %>%
+  arrange(Surface, Temperature, PhageType)
+
+# Create formatted table
+survival_table <- survival_summary %>%
+  mutate(
+    Initial_Titer = formatC(Initial_Titer, format = "e", digits = 2),
+    Final_Titer = formatC(Final_Titer, format = "e", digits = 2),
+    Survival_Rate = round(Survival_Rate, 2),
+    SD = round(SD, 2)
+  ) %>%
+  kable(
+    caption = "Summary of Virus Survival Rates by Surface and Temperature",
+    col.names = c("Surface", "Phage", "Temp (°C)", 
+                  "Initial Titer", "Final Titer", 
+                  "Survival Rate (%)", "SD"),
+    format = "html"
+  ) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+                full_width = FALSE) %>%
+  group_rows(index = table(survival_summary$Surface))
+```
+
+
+```{r}
+# Display results
+print(survival_plot)
+print(survival_table)
+
+# Rate of decline analysis
+# Calculate rate of decline for each condition
+rate_analysis <- survival_data %>%
+  group_by(Surface, PhageType, Temperature, Experiment) %>%
+  do(model = lm(log10(SurvivalRate + 0.01) ~ Time, data = .)) %>%
+  mutate(
+    slope = coef(model)[2],
+    r_squared = summary(model)$r.squared,
+    p_value = summary(model)$coefficients[2,4]
+  ) %>%
+  ungroup() %>%
+  group_by(Surface, PhageType, Temperature) %>%
+  summarise(
+    mean_slope = mean(slope),
+    sd_slope = sd(slope),
+    mean_r2 = mean(r_squared),
+    n = n()
+  ) %>%
+  mutate(
+    half_life = -log(2)/(mean_slope * log(10)),
+    decline_rate_per_hour = -(1 - 10^mean_slope) * 100
+  )
+```
+
+
+```{r}
+# Function for non-parametric analysis
+# Create formatted table of decline rates
+decline_table <- rate_analysis %>%
+  mutate(
+    mean_slope = round(mean_slope, 4),
+    sd_slope = round(sd_slope, 4),
+    mean_r2 = round(mean_r2, 3),
+    half_life = round(half_life, 2),
+    decline_rate_per_hour = round(decline_rate_per_hour, 2)
+  ) %>%
+  arrange(Surface, Temperature, PhageType) %>%
+  kable(
+    caption = "Rate of Decline Analysis by Surface, Temperature, and Phage Type",
+    col.names = c("Surface", "Phage", "Temp (°C)", 
+                  "Log10 Slope", "Slope SD", "R²",
+                  "n", "Half-life (h)", "Decline Rate (%/h)"),
+    format = "html"
+  ) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+                full_width = FALSE) %>%
+  group_rows(index = table(rate_analysis$Surface))
+
+# Display results
+print(decline_table)
+```
+
+
+
+```{r}
+# Interaction analysis
+interaction_analysis <- lapply(unique(survival_data$Surface), function(s) {
+  surface_data <- survival_data %>%
+    filter(Surface == s, Time == 8) 
+  
+  # Perform two-way ANOVA
+  model <- aov(SurvivalRate ~ PhageType * Temperature, data = surface_data)
+  
+  tidy(model) %>%
+    mutate(Surface = s)
+}) %>%
+  bind_rows()
+
+interaction_table <- interaction_analysis %>%
+  select(Surface, term, statistic, p.value) %>%
+  mutate(
+    term = case_when(
+      term == "PhageType" ~ "Phage Type",
+      term == "Temperature" ~ "Temperature",
+      term == "PhageType:Temperature" ~ "Phage × Temperature",
+      TRUE ~ term
+    ),
+    statistic = round(statistic, 2),
+    p.value = round(p.value, 4),
+    significance = case_when(
+      p.value < 0.001 ~ "***",
+      p.value < 0.01 ~ "**",
+      p.value < 0.05 ~ "*",
+      p.value < 0.1 ~ ".",
+      TRUE ~ "ns"
+    )
+  ) %>%
+  filter(term != "Residuals") %>%
+  arrange(Surface, term) %>%
+  kable(
+    caption = "Two-way ANOVA Results by Surface",
+    col.names = c("Surface", "Effect", "F-statistic", "p-value", "Significance"),
+    format = "html"
+  ) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+                full_width = FALSE) %>%
+  group_rows(index = table(interaction_analysis$Surface[interaction_analysis$term != "Residuals"]))
+
+# Display results
+print(interaction_table)
+```
+
+
+```{r}
+# 1. Data frames as CSV in Tables/KQ145
+write.csv(survival_summary, "Tables/KQ145/survival_summary.csv", row.names = FALSE)
+write.csv(rate_analysis, "Tables/KQ145/rate_analysis.csv", row.names = FALSE)
+write.csv(interaction_analysis, "Tables/KQ145/interaction_analysis.csv", row.names = FALSE)
+
+# 2. Lists or printed results as TXT in Tables/KQ145
+assumption_text <- capture.output(print(assumption_results))
+writeLines(assumption_text, "Tables/KQ145/assumption_results.txt")
+
+statistical_text <- capture.output(print(statistical_results))
+writeLines(statistical_text, "Tables/KQ145/statistical_results.txt")
+
+decline_table_text <- capture.output(print(decline_table))
+writeLines(decline_table_text, "Tables/KQ145/decline_table.txt")
+
+interaction_table_text <- capture.output(print(interaction_table))
+writeLines(interaction_table_text, "Tables/KQ145/interaction_table.txt")
+
+survival_table_text <- capture.output(print(survival_table))
+writeLines(survival_table_text, "Tables/KQ145/survival_table.txt")
+
+```
+
+
+
+```{r}
+#Print Table in overleaf for survival rate
+survival_summary <- read.csv("Tables/KQ145/survival_summary.csv", stringsAsFactors = FALSE)
+
+n_cols <- ncol(survival_summary)
+align_vec <- c("l", "l", rep("r", n_cols - 1))
+digits_vec <- c(0, rep(2, n_cols))
+
+# Create xtable
+xtable_output <- xtable(
+  survival_summary,
+  caption = "Summary of phage survival rates across surfaces and temperatures.",
+  align = align_vec,
+  digits = digits_vec
+)
+
+# Print LaTeX table
+print(
+  xtable_output,
+  include.rownames = FALSE,
+  floating = TRUE,
+  latex.environments = "center",
+  caption.placement = "top",
+  sanitize.text.function = function(x) gsub("_", "\\\\_", x, fixed = TRUE)
+)
+```
+
+
+```{r}
+survival_summary <- read.csv("Tables/KQ145/survival_summary.csv", stringsAsFactors = FALSE)
+# Automatically detect columns containing "Titer"
+sci_cols <- grep("titer", names(survival_summary), ignore.case = TRUE, value = TRUE)
+
+# Apply scientific notation formatting
+survival_summary[sci_cols] <- lapply(
+  survival_summary[sci_cols],
+  function(x) if (is.numeric(x)) formatC(x, format = "e", digits = 2) else x
+)
+
+n_cols <- ncol(survival_summary)
+align_vec <- c("l", "l", rep("r", n_cols - 1))
+digits_vec <- c(0, rep(2, n_cols))
+
+# Create xtable
+xtable_output <- xtable(
+  survival_summary,
+  caption = "Summary of phage survival rates across surfaces and temperatures.",
+  align = align_vec,
+  digits = digits_vec
+)
+
+# Print LaTeX table
+print(
+  xtable_output,
+  include.rownames = FALSE,
+  floating = TRUE,
+  latex.environments = "center",
+  caption.placement = "top",
+  sanitize.text.function = function(x) gsub("_", "\\\\_", x, fixed = TRUE)
+)
+```
+
+
+```{r}
+# Plots as PNG in Figures/KQ145
+ggsave("Tables/KQ145/survival_plot.png", plot = survival_plot, width = 8, height = 6, dpi = 300)
+
+for (s_name in names(survival_plots)) {
+  ggsave(paste0("Tables/KQ145/survival_plot_", s_name, ".png"), 
+         plot = survival_plots[[s_name]], width = 8, height = 6, dpi = 300)
+}
+```
+
+
+```{r}
+#Create reaction norm plots for decline rates and half-lives
+#Load data
+df <- read.csv("rate_analysis.csv")
+
+df <- df %>% 
+  filter(!grepl("control", Surface, ignore.case = FALSE))
+
+df <- df %>%
+  mutate(Surface_Temp = paste(Surface, paste0(Temperature, "°C")))
+df <- df %>%
+  mutate(Surface_Temp = factor(Surface_Temp, 
+    levels = df %>%
+      arrange(Surface, Temperature) %>%
+      distinct(Surface_Temp) %>%
+      pull(Surface_Temp)
+  ))
+
+# Plot
+theme_nature <- theme_bw(base_size = 14, base_family = "Helvetica") +
+  theme(
+    panel.grid = element_blank(),
+    panel.border = element_blank(),
+    axis.line = element_line(color = "black", linewidth = 0.6),
+    axis.ticks = element_line(color = "black", linewidth = 0.6),
+    legend.title = element_blank(),
+    legend.text = element_text(size = 14),  
+    legend.key.width = unit(3.3, "cm"),     
+    legend.key.height = unit(0.9, "cm"),    
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 11),
+    axis.text.y = element_text(size = 11),
+    plot.title = element_text(face = "bold", hjust = 0.5, size = 14),
+    legend.position = "top",
+    legend.justification = "center",
+    legend.box.just = "center",
+    legend.box = "horizontal"
+  )
+#color and line types
+line_types <- c("solid", "dashed")
+names(line_types) <- unique(df$PhageType)
+
+phage_colors <- c("black", "black")
+names(phage_colors) <- unique(df$PhageType)
+    
+
+# Panel a (decline rates)
+p1 <- ggplot(df, aes(x = Surface_Temp, 
+                     y = decline_rate_per_hour, 
+                     color = PhageType, 
+                     group = PhageType,
+                     linetype = PhageType)) +
+  geom_point(position = position_dodge(width = 0.4), size = 2.4) +
+  geom_line(position = position_dodge(width = 0.4), linewidth = 1.3) +
+  stat_summary(fun.data = mean_sdl, fun.args = list(mult = 1),
+               geom = "errorbar", width = 0.2,
+               position = position_dodge(width = 0.4)) +
+  scale_linetype_manual(values = line_types, labels = c(expression(phi * "X174"), "T4")) +
+  scale_color_manual(values = phage_colors, labels = c(expression(phi * "X174"), "T4")) +
+  guides(
+    color = guide_legend(title = NULL, nrow = 1, byrow = TRUE),
+    linetype = guide_legend(title = NULL, nrow = 1, byrow = TRUE)
+  ) +
+  labs(
+    x = "Environment (Surface x Temperature)",
+    y = "Decline rate (per hour)",
+    title = "(a) Decline Rate Reaction Norm"
+  ) +
+  theme_nature
+
+# Panel (b)Half-life
+p2 <- ggplot(df, aes(x = Surface_Temp, 
+                     y = half_life, 
+                     color = PhageType, 
+                     group = PhageType,
+                     linetype = PhageType)) +
+  geom_point(position = position_dodge(width = 0.4), size = 2.4) +
+  geom_line(position = position_dodge(width = 0.4), linewidth = 1.3) +
+  stat_summary(fun.data = mean_sdl, fun.args = list(mult = 1),
+               geom = "errorbar", width = 0.2,
+               position = position_dodge(width = 0.4)) +
+  scale_linetype_manual(values = line_types, labels = c(expression(phi * "X174"), "T4")) +
+  scale_color_manual(values = phage_colors, labels = c(expression(phi * "X174"), "T4")) +
+  labs(
+    x = "Environment (Surface x Temperature)",
+    y = "Half-life (hours)",
+    title = "(b) Half-life Reaction Norm"
+  ) +
+  theme_nature +
+  theme(legend.position = "none")
+
+# Combine and center legend
+final_plot <- (p1 + p2) +
+  plot_layout(widths = c(1, 1), guides = "collect") & 
+  theme(
+    legend.position = "top",
+    legend.justification = "center",
+    legend.box.just = "center",
+    legend.box = "horizontal"
+  )
+
+# Save
+ggsave("reaction_norm_rate_halflife.pdf", final_plot, width = 12, height = 5)
+ggsave("reaction_norm_rate_halflife.png", final_plot, width = 12, height = 5, dpi = 600)
+
+final_plot
+```
+
+
+```{r}
+# Survival rate separate reaction norm figure
+df <- read.csv("survival_summary.csv")
+df <- df %>% 
+  filter(!grepl("control", Surface, ignore.case = FALSE))
+df <- df %>%
+  mutate(Surface_Temp = paste(Surface, paste0(Temperature, "°C")))
+df <- df %>%
+  mutate(Surface_Temp = factor(Surface_Temp,
+    levels = df %>%
+      arrange(Surface, Temperature) %>%
+      distinct(Surface_Temp) %>%
+      pull(Surface_Temp)
+  ))
+
+
+theme_nature <- theme_bw(base_size = 14, base_family = "Helvetica") +
+  theme(
+    panel.grid = element_blank(),
+    panel.border = element_blank(),
+    axis.line = element_line(color = "black", linewidth = 0.9),
+    axis.ticks = element_line(color = "black", linewidth = 0.6),
+    legend.title = element_blank(),
+    legend.text = element_text(size = 12),
+    legend.key.width = unit(1.8, "cm"),   
+    legend.key.height = unit(0.5, "cm"),  
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 11),
+    axis.text.y = element_text(size = 11),
+    plot.title = element_text(face = "bold", hjust = 0.5, size = 14),
+    legend.position = "top",
+    legend.justification = "center",
+    legend.box = "horizontal"
+  )
+
+
+line_types <- c("solid", "dashed")
+names(line_types) <- unique(df$PhageType)
+
+phage_colors <- c("PhiX174" = "black", "T4" = "black")
+
+
+p <- ggplot(df, aes(x = Surface_Temp,
+                    y = Survival_Rate,
+                    color = PhageType,
+                    group = PhageType,
+                    linetype = PhageType)) +
+  geom_point(position = position_dodge(width = 0.4), size = 2.2) +
+  geom_line(position = position_dodge(width = 0.4), linewidth = 1.3) +
+  geom_errorbar(aes(ymin = Survival_Rate - SD, ymax = Survival_Rate + SD),
+                width = 0.2, position = position_dodge(width = 0.4)) +
+  scale_linetype_manual(
+    values = line_types,
+    labels = c(expression(phi * "X174"), "T4")
+  ) +
+  scale_color_manual(
+    values = phage_colors,
+    labels = c(expression(phi * "X174"), "T4")
+  ) +
+  guides(
+    color = guide_legend(
+      title = "Phage Type",
+      nrow = 1,
+      byrow = TRUE,
+      override.aes = list(linewidth = 1, size = 4)  
+    ),
+    linetype = guide_legend(
+      title = "Phage Type",
+      nrow = 1,
+      byrow = TRUE,
+      override.aes = list(linewidth = 1)
+    )
+  ) +
+  labs(
+    x = "Environment (Surface × Temperature)",
+    y = "Survival rate (%)",
+    title = "Survival Rate Reaction Norm"
+  ) +
+  theme_nature
+
+#Save
+ggsave("reaction_norm_Survival_rate.pdf", p, width = 7, height = 5)
+ggsave("reaction_norm_Survival_rate.png", p, width = 7, height = 5, dpi = 600)
+
+p
+```
+
+
+```{r}
+#Make separate reaction norm figures 
+# Load data
+df <- read.csv("rate_analysis.csv")
+
+df <- df %>% 
+  filter(!grepl("control", Surface, ignore.case = FALSE))
+
+df <- df %>%
+  mutate(Surface_Temp = paste(Surface, paste0(Temperature, "°C")))
+
+df <- df %>%
+  mutate(Surface_Temp = factor(Surface_Temp, 
+    levels = df %>%
+      arrange(Surface, Temperature) %>%
+      distinct(Surface_Temp) %>%
+      pull(Surface_Temp)
+  ))
+
+#ggplot style
+theme_nature <- theme_bw(base_size = 14, base_family = "Helvetica") +
+  theme(
+    panel.grid = element_blank(),
+    panel.border = element_blank(),
+    axis.line = element_line(color = "black", linewidth = 1.3),
+    axis.ticks = element_line(color = "black", linewidth = 0.6),
+    legend.title = element_blank(),
+    legend.text = element_text(size = 14),  
+    legend.key.width = unit(3.3, "cm"),     
+    legend.key.height = unit(0.9, "cm"),    
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 11),
+    axis.text.y = element_text(size = 11),
+    plot.title = element_text(face = "bold", hjust = 0.5, size = 14),
+    legend.position = "top",
+    legend.justification = "center",
+    legend.box.just = "center",
+    legend.box = "horizontal"
+  )
+
+#Line types
+line_types <- c("solid", "dashed")
+names(line_types) <- unique(df$PhageType)
+
+phage_colors <- c("black", "black")
+names(phage_colors) <- unique(df$PhageType)
+
+# Decline rate
+declineRate <- ggplot(df, aes(x = Surface_Temp, 
+                     y = decline_rate_per_hour, 
+                     color = PhageType, 
+                     group = PhageType,
+                     linetype = PhageType)) +
+  geom_point(position = position_dodge(width = 0.4), size = 2.4) +
+  geom_line(position = position_dodge(width = 0.4), linewidth = 1.5) +
+  stat_summary(fun.data = mean_sdl, fun.args = list(mult = 1),
+               geom = "errorbar", width = 0.2,
+               position = position_dodge(width = 0.4)) +
+  scale_linetype_manual(values = line_types,labels = c(expression(phi * "X174"), "T4")) +
+  scale_color_manual(values = phage_colors,labels = c(expression(phi * "X174"), "T4")) +
+  guides(
+    color = guide_legend(title = NULL, nrow = 1, byrow = TRUE),
+    linetype = guide_legend(title = NULL, nrow = 1, byrow = TRUE)
+  ) +
+  labs(
+    x = "Environment (Surface × Temperature)",
+    y = "Decline rate (per hour)",
+    title = "Decline Rate Reaction Norm"
+  ) +
+  theme_nature
+
+# === Export ===
+ggsave("reaction_norm_DeclineRate.pdf", declineRate, width = 7, height = 5)
+ggsave("reaction_norm_DeclineRate.png", declineRate, width = 7, height = 5, dpi = 600)
+
+declineRate
+```
+
+
+```{r}
+#Half-life, separate figure
+df <- read.csv("rate_analysis.csv")
+
+df <- df %>% 
+  filter(!grepl("control", Surface, ignore.case = FALSE))
+
+df <- df %>%
+  mutate(Surface_Temp = paste(Surface, paste0(Temperature, "°C")))
+df <- df %>%
+  mutate(Surface_Temp = factor(Surface_Temp, 
+    levels = df %>%
+      arrange(Surface, Temperature) %>%
+      distinct(Surface_Temp) %>%
+      pull(Surface_Temp)
+  ))
+
+
+theme_nature <- theme_bw(base_size = 14, base_family = "Helvetica") +
+  theme(
+    panel.grid = element_blank(),
+    panel.border = element_blank(),
+    axis.line = element_line(color = "black", linewidth = 1.3),
+    axis.ticks = element_line(color = "black", linewidth = 0.6),
+    legend.title = element_blank(),
+    legend.text = element_text(size = 14),
+    legend.key.height = unit(0.9, "cm"),    
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 11),
+    axis.text.y = element_text(size = 11),
+    plot.title = element_text(face = "bold", hjust = 0.5, size = 14),
+    legend.position = "top",
+    legend.justification = "center",
+    legend.box.just = "center",
+    legend.box = "horizontal"
+  )
+
+
+line_types <- c("solid", "dashed")
+names(line_types) <- unique(df$PhageType)
+
+phage_colors <- c("black", "black")
+names(phage_colors) <- unique(df$PhageType)
+
+#Half-life
+Half_Rate <- ggplot(df, aes(x = Surface_Temp, 
+                     y = half_life, 
+                     color = PhageType, 
+                     group = PhageType,
+                     linetype = PhageType)) +
+  geom_point(position = position_dodge(width = 0.4), size = 2.4) +
+  geom_line(position = position_dodge(width = 0.4), linewidth = 1.5) +
+  stat_summary(fun.data = mean_sdl, fun.args = list(mult = 1),
+               geom = "errorbar", width = 0.2,
+               position = position_dodge(width = 0.4)) +
+  scale_linetype_manual(values = line_types,labels = c(expression(phi * "X174"), "T4")) +
+  scale_color_manual(values = phage_colors,labels = c(expression(phi * "X174"), "T4")) +
+  guides(
+    color = guide_legend(title = NULL, nrow = 1, byrow = TRUE),
+    linetype = guide_legend(title = NULL, nrow = 1, byrow = TRUE)
+  ) +
+  labs(
+    x = "Environment (Surface × Temperature)",
+    y = "Half-life (per hour)",
+    title = "Half-life Reaction Norm"
+  ) +
+  theme_nature
+
+#Save
+ggsave("reaction_norm_Half.pdf", Half_Rate, width = 7, height = 5)
+ggsave("reaction_norm_Half.png", Half_Rate, width = 7, height = 5, dpi = 600)
+
+Half_Rate
+```
+
+
+```{r}
+#Differences in reproductive rates
+#Effect of surface and temperature on reproduction 
+
+# Data preparation and initial analysis
+reproduction_analysis <- reproduction %>%
+  group_by(PhageType, Surface, InactivationTemp, InactivationTimeHours) %>%
+  arrange(ReproductionTimeMinutes) %>%
+  mutate(
+    # Calculate normalized titer (relative to starting point)
+    NormalizedTiter = VirusTiter / first(VirusTiter),
+    # Calculate growth rate between timepoints
+    GrowthRate = case_when(
+      ReproductionTimeMinutes > 0 ~ (VirusTiter - first(VirusTiter)) / ReproductionTimeMinutes,
+      TRUE ~ 0
+    ),
+    # Calculate log-transformed titer for easier visualization
+    LogTiter = log10(VirusTiter + 1)
+  ) %>%
+  ungroup()
+
+```
+
+
+```{r}
+# Function to calculate standard error
+calc_se <- function(x) sd(x) / sqrt(length(x))
+# Enhanced growth curves with error bands
+growth_plot <- reproduction_analysis %>%
+  filter(InactivationTimeHours == 0) %>%  # Fresh samples only
+  group_by(PhageType, Surface, InactivationTemp, ReproductionTimeMinutes) %>%
+  summarise(
+    MeanTiter = mean(VirusTiter),
+    SE = calc_se(VirusTiter),
+    .groups = 'drop'
+  ) %>%
+  ggplot(aes(x = ReproductionTimeMinutes, 
+             y = MeanTiter,
+             color = PhageType,
+             fill = PhageType)) +
+  geom_line(size = 0.5) +
+  geom_point() +
+  geom_ribbon(aes(ymin = MeanTiter - SE, ymax = MeanTiter + SE), alpha = 0.2) +
+  scale_y_log10(labels = scientific) +
+  facet_grid(InactivationTemp ~ Surface) +
+  theme_pubr() +
+  labs(
+    x = "Time (minutes)",
+    y = "Virus Titer (PFU/mL)",
+  ) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+
+```{r}
+# Normalized growth curves
+normalized_plot <- reproduction_analysis %>%
+  filter(InactivationTimeHours == 0) %>%
+  group_by(PhageType, Surface, InactivationTemp, ReproductionTimeMinutes) %>%
+  summarise(
+    MeanNormTiter = mean(NormalizedTiter),
+    SE = calc_se(NormalizedTiter),
+    .groups = 'drop'
+  ) %>%
+  ggplot(aes(x = ReproductionTimeMinutes, 
+             y = MeanNormTiter,
+             color = PhageType,
+             fill = PhageType)) +
+  geom_line() +
+  geom_point() +
+  geom_ribbon(aes(ymin = MeanNormTiter - SE, ymax = MeanNormTiter + SE), alpha = 0.2) +
+  scale_y_log10(labels = comma) +
+  facet_grid(InactivationTemp ~ Surface) +
+  theme_pubr() +
+  labs(
+    x = "Time (minutes)",
+    y = "Normalized Titer (Fold Change)",
+  ) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Comprehensive metrics for comparison
+
+final_comparison <- reproduction_analysis %>%
+  filter(ReproductionTimeMinutes == 60,
+         InactivationTimeHours == 0) %>%
+  group_by(Surface, InactivationTemp) %>%
+  summarise(
+    T4_Mean = mean(VirusTiter[PhageType == "T4"]),
+    Phix_Mean = mean(VirusTiter[PhageType == "Phix"]),
+    T4_SE = calc_se(VirusTiter[PhageType == "T4"]),
+    Phix_SE = calc_se(VirusTiter[PhageType == "Phix"]),
+    TiterRatio = T4_Mean / Phix_Mean,
+    LogFoldDifference = log2(TiterRatio),
+    .groups = 'drop'
+  )
+```
+
+
+```{r}
+# Growth phase analysis
+growth_phases <- reproduction_analysis %>%
+  filter(InactivationTimeHours == 0) %>%
+  group_by(PhageType, Surface, InactivationTemp) %>%
+  summarise(
+    EarlyGrowthRate = (VirusTiter[ReproductionTimeMinutes == 30] - VirusTiter[ReproductionTimeMinutes == 0]) / 30,
+    LateGrowthRate = (VirusTiter[ReproductionTimeMinutes == 60] - VirusTiter[ReproductionTimeMinutes == 30]) / 30,
+    .groups = 'drop'
+  ) %>%
+  pivot_wider(
+    names_from = PhageType,
+    values_from = c(EarlyGrowthRate, LateGrowthRate)
+  ) %>%
+  mutate(
+    EarlyGrowthRatio = EarlyGrowthRate_T4 / EarlyGrowthRate_Phix,
+    LateGrowthRatio = LateGrowthRate_T4 / LateGrowthRate_Phix
+  )
+
+# Temperature sensitivity analysis
+temp_sensitivity <- reproduction_analysis %>%
+  filter(ReproductionTimeMinutes == 60,
+         InactivationTimeHours == 0) %>%
+  group_by(PhageType, Surface) %>%
+  summarise(
+    TempEffect = mean(VirusTiter[InactivationTemp == 37]) / mean(VirusTiter[InactivationTemp == 4]),
+    LogTempEffect = log2(TempEffect),
+    .groups = 'drop'
+  )
+
+# Combine all metrics into final table
+final_table <- final_comparison %>%
+  left_join(growth_phases, by = c("Surface", "InactivationTemp")) %>%
+  select(Surface, InactivationTemp, TiterRatio, LogFoldDifference, EarlyGrowthRatio, LateGrowthRatio) %>%
+  arrange(Surface, InactivationTemp)
+```
+
+
+```{r}
+
+# Format tables
+formatted_table <- final_table %>%
+  kable(
+    caption = "Comprehensive Comparison of T4 vs PhiX Reproduction",
+    col.names = c("Surface", "Temperature (°C)", 
+                  "Final Titer Ratio (T4/PhiX)",
+                  "Log2 Fold Difference",
+                  "Early Growth Rate Ratio",
+                  "Late Growth Rate Ratio"),
+    digits = 2
+  ) %>%
+  kable_styling(bootstrap_options = c("striped", "hover"),
+                full_width = FALSE)
+
+# Temperature sensitivity table
+temp_table <- temp_sensitivity %>%
+  arrange(Surface) %>%
+  kable(
+    caption = "Temperature Sensitivity Analysis",
+    col.names = c("Phage Type", "Surface", 
+                  "37°C/4°C Ratio", "Log2 Fold Change"),
+    digits = 2
+  ) %>%
+  kable_styling(bootstrap_options = c("striped", "hover"),
+                full_width = FALSE)
+
+# Display results
+
+print(growth_plot)
+print(normalized_plot)
+print(formatted_table)
+print(temp_table)
+
+
+# Summary of key findings
+key_findings <- final_comparison %>%
+  summarise(
+    MeanTiterRatio = mean(TiterRatio),
+    SDTiterRatio = sd(TiterRatio),
+    MaxTiterRatio = max(TiterRatio),
+    MinTiterRatio = min(TiterRatio),
+    MedianLogFold = median(LogFoldDifference)
+  ) %>%
+  kable(caption = "Summary Statistics",
+        digits = 2) %>%
+  kable_styling(bootstrap_options = c("striped", "hover"),
+                full_width = FALSE)
+
+print(key_findings)
+```
+
+
+```{r}
+# Save Key Outputs
+# Save data frames as CSV
+write.csv(reproduction_analysis, "Tables/KQ2/reproduction_analysis.csv", row.names = FALSE)
+write.csv(final_comparison, "Tables/KQ2/final_comparison.csv", row.names = FALSE)
+write.csv(growth_phases, "Tables/KQ2/growth_phases.csv", row.names = FALSE)
+write.csv(temp_sensitivity, "Tables/KQ2/temp_sensitivity.csv", row.names = FALSE)
+write.csv(final_table, "Tables/KQ2/final_table.csv", row.names = FALSE)
+
+# Save printed tables as TXT
+formatted_table_text <- capture.output(print(formatted_table))
+writeLines(formatted_table_text, "Tables/KQ2/formatted_table.txt")
+
+temp_table_text <- capture.output(print(temp_table))
+writeLines(temp_table_text, "Tables/KQ2/temp_table.txt")
+
+key_findings_text <- capture.output(print(key_findings))
+writeLines(key_findings_text, "Tables/KQ2/key_findings.txt")
+
+# Save plots as PNG
+ggsave("Tables/KQ2/growth_plot.png", plot = growth_plot, width = 8, height = 6, dpi = 300)
+ggsave("Tables/KQ2/normalized_plot.png", plot = normalized_plot, width = 8, height = 6, dpi = 300)
+
+```
+
+
+```{r}
+#Reproduction Reaction Norm plot
+df <- read.csv("reproduction.csv")
+
+df <- df %>%
+  filter(!grepl("control", Surface, ignore.case = FALSE))
+
+
+df_summary <- df %>%
+  group_by(Surface, InactivationTemp, PhageType) %>%
+  summarise(mean_rep = mean(VirusTiter, na.rm = TRUE),
+            .groups = "drop")
+
+
+df_summary <- df_summary %>%
+  mutate(Surface_Temp = paste0(Surface, " ", InactivationTemp, "°C"))
+df_summary <- df_summary %>%
+  mutate(Surface_Temp = factor(Surface_Temp,
+                               levels = df_summary %>%
+                                 arrange(Surface, InactivationTemp) %>%
+                                 distinct(Surface_Temp) %>%
+                                 pull(Surface_Temp)))
+
+
+phage_colors <- c("black", "black")
+names(phage_colors) <- unique(df_summary$PhageType)
+names(line_types) <- unique(df_summary$PhageType)
+
+
+theme_nature <- theme_bw(base_size = 14, base_family = "Helvetica") +
+  theme(
+    panel.grid       = element_blank(),
+    panel.border     = element_blank(),
+    axis.line        = element_line(color = "black", linewidth = 0.7),
+    axis.ticks       = element_line(color = "black", linewidth = 0.7),
+    legend.position  = "top",
+    legend.title     = element_blank(),
+    legend.text      = element_text(size = 12),
+    legend.key.width = unit(2.5, "cm"),     
+    legend.key.height = unit(0.5, "cm"),    
+    axis.text.x      = element_text(angle = 45, hjust = 1, size = 11),
+    axis.text.y      = element_text(size = 11),
+    plot.title       = element_text(face = "bold", hjust = 0.5, size = 14)
+  )
+
+
+# Reaction norm plot (log scale) 
+p <- ggplot(df_summary,
+            aes(x = Surface_Temp,
+                y = mean_rep,
+                color = PhageType,
+                linetype = PhageType,
+                group = PhageType)) +
+  geom_line(linewidth = 1.3) +
+  geom_point(size = 3) +
+  scale_y_log10() +
+  scale_color_manual(values = phage_colors,
+      labels = c(expression(phi * "X174"), "T4")) +
+  scale_linetype_manual(values = line_types,
+      labels = c(expression(phi * "X174"), "T4")) +
+  guides(
+    color = guide_legend(
+      title = NULL,
+      nrow = 1,
+      byrow = TRUE,
+      override.aes = list(linewidth = 1.2, size = 3) 
+    ),
+    linetype = guide_legend(
+      title = NULL,
+      nrow = 1,
+      byrow = TRUE,
+      override.aes = list(linewidth = 1.2)
+    )
+  ) +
+  labs(
+    x = "Surface and Temperature",
+    y = expression("Mean reproduction rate (log"[10]*")"),
+    title = "Reproductive performance after surface exposure"
+  ) +
+  theme_nature
+
+# Save
+ggsave("reaction_norm_reproduction_logscale_combined.pdf", p, width = 12, height = 5)
+ggsave("reaction_norm_reproduction_logscale_combined.png", p, width = 12, height = 5, dpi = 600)
+
+p
+```
+
+
+```{r}
+#Print Tables for overleaf
+# Load data
+temp_sensitivity <- read.csv("Tables/KQ2/temp_sensitivity.csv", stringsAsFactors = FALSE)
+
+# Create and print xtable
+xtable_output <- xtable(temp_sensitivity,
+                       caption = "Temperature Sensitivity Analysis",
+                       align = c("l", "l", "l", "r", "r"),
+                       digits = c(0, 0, 0, 2, 2))
+
+print(xtable_output,
+      include.rownames = FALSE,
+      floating = TRUE,
+      latex.environments = "center",
+      caption.placement = "top",
+      sanitize.text.function = function(x) gsub("_", "\\\\_", x))
+
+# Load data
+final_table <- read.csv("Tables/KQ2/final_table.csv", stringsAsFactors = FALSE)
+
+# Create and print xtable
+xtable_output <- xtable(final_table,
+                       caption = "Comprehensive Comparison of T4 vs. PhiX Reproduction",
+                       align = c("l", "l", "r", "r", "r", "r", "r"),
+                       digits = c(0, 0, 0, 2, 2, 2, 2))
+
+print(xtable_output,
+      include.rownames = FALSE,
+      floating = TRUE,
+      latex.environments = "center",
+      caption.placement = "top",
+      sanitize.text.function = function(x) gsub("_", "\\\\_", x))
+```
+
+
+```{r}
+#Relationship between survival and reproduction
+# Data Preparation
+df <- merged_data %>%
+  mutate(
+    PhageType = factor(PhageType),
+    Surface = factor(Surface),
+    Temperature = as.numeric(Temperature),
+    Time = as.numeric(Time),
+    ReproductionTimeMinutes = as.numeric(ReproductionTimeMinutes),
+    MeanSurfaceVirusTiter_surfaces = as.numeric(MeanSurfaceVirusTiter_surfaces),
+    VirusTiter = as.numeric(VirusTiter)
+  )
+
+# Spearman Correlation
+spearman_results <- df %>%
+  group_by(PhageType, Temperature, Surface) %>%
+  summarize(
+    n = n(),
+    cor_result = list(cor.test(MeanSurfaceVirusTiter_surfaces, VirusTiter, method = "spearman")),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    rho = map_dbl(cor_result, ~ .x$estimate),
+    p.value = map_dbl(cor_result, ~ .x$p.value)
+  ) %>%
+  select(-cor_result)
+# Print Spearman results
+print(spearman_results)
+
+# Load data
+spearman <- read.csv("Tables/KQ3/spearman_results.csv", stringsAsFactors = FALSE)
+
+# Format data
+formatted_table <- spearman %>%
+  mutate(
+    p.value = signif(p.value, 3),
+    rho = round(rho, 3)
+  )
+
+# Create and print xtable
+xtable_output <- xtable(formatted_table,
+                       caption = "Spearman Correlation Results Between Survival and Reproduction",
+                       align = c("l", "l", "r", "l", "r", "r", "r"),
+                       digits = c(0, 0, 0, 0, 0, 3, 3))
+
+print(xtable_output,
+      include.rownames = FALSE,
+      floating = TRUE,
+      latex.environments = "center",
+      caption.placement = "top",
+      sanitize.text.function = function(x) gsub("_", "\\\\_", x))
+
+# Save Key Outputs
+write.csv(spearman_results, "Tables/KQ3/spearman_results.csv", row.names = FALSE)
+```
+
+
+```{r}
+#Spearman correlations reaction norm plot
+
+df <- read.csv("spearman_results.csv")
+drop_control <- TRUE
+if (drop_control) {
+  df <- df %>% filter(!grepl("control", Surface, ignore.case = FALSE))
+}
+
+df <- df %>%
+  mutate(Temperature = factor(Temperature,
+                              levels = c(4, 37),
+                              labels = c("4 °C", "37 °C")))
+
+df <- df %>%
+  mutate(Surface = factor(Surface,
+                          levels = unique(Surface)))  
+
+df <- df %>%
+  mutate(sig = case_when(
+    p.value <= 0.001 ~ "***",
+    p.value <= 0.01  ~ "**",
+    p.value <= 0.05  ~ "*",
+    TRUE             ~ ""
+  ))
+theme_nature <- theme_minimal(base_size = 14) +
+  theme(
+    panel.grid = element_blank(),
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 11),
+    axis.text.y = element_text(size = 11),
+    axis.title  = element_text(size = 12),
+    plot.title  = element_text(face = "bold", hjust = 0, size = 14),
+    strip.text  = element_text(face = "bold", size = 12),
+    legend.position = "right"
+  )
+
+
+df$PhageType <- factor(df$PhageType, levels = c("T4", "PhiX174"))
+
+df$PhageType <- factor(df$PhageType,
+                       levels = c("T4", "PhiX174"),
+                       labels = c( "T4", "plain(phi)*'X174'"))
+
+# Heatmap
+p <- ggplot(df, aes(x = Surface, y = Temperature, fill = rho)) +
+  geom_tile(color = "white", linewidth = 0.4) +
+  geom_text(aes(label = sig), size = 4, color = "black") +
+  
+  scale_fill_gradient2(
+    low = "#313695", mid = "white", high = "#A50026",
+    midpoint = 0, limits = c(-1, 1),
+    name = expression("Spearman ρ")
+  ) +
+  coord_fixed() +
+  facet_wrap(~ PhageType, nrow = 1, labeller = label_parsed) +
+  labs(
+    x = "Surface",
+    y = "Temperature",
+    title = "Relationship between survival and reproduction"
+  ) +
+  theme_nature +
+  theme(
+    plot.title = element_text(size = 13, face = "bold", hjust = 0.5, lineheight = 1.1)
+  )
+# Save
+ggsave("spearman_heatmap_by_phage.pdf", p, width = 9, height = 4.5)
+ggsave("spearman_heatmap_by_phage.png", p, width = 9, height = 4.5, dpi = 600)
+p
+```
+
+
+
+```{r}
+#Rate of Decline modelling (Printing for overleaf)
+#Linear models to log-transformed survival rates over time to estimate slopes, half-lives, and decline rates. 
+
+# Load the rate_analysis results from CSV
+rate_analysis <- read.csv("Tables/KQ145/rate_analysis.csv", stringsAsFactors = FALSE)
+
+# Format the data
+formatted_table <- rate_analysis %>%
+  mutate(
+    mean_slope = round(mean_slope, 4),
+    sd_slope = round(sd_slope, 4),
+    mean_r2 = round(mean_r2, 3),
+    half_life = round(half_life, 2),
+    decline_rate_per_hour = round(decline_rate_per_hour, 2)
+  ) %>%
+  arrange(Surface, Temperature, PhageType)
+
+# Create and print xtable
+xtable_output <- xtable(formatted_table,
+                       caption = "Rate of Decline Analysis by Surface, Temperature, and Phage Type",
+                       align = c("l", "l", "l", "r", "r", "r", "r", "r", "r", "r"),
+                       digits = c(0, 0, 0, 0, 4, 4, 3, 0, 2, 2))
+
+print(xtable_output,
+      include.rownames = FALSE,
+      floating = TRUE,
+      latex.environments = "center",
+      caption.placement = "top",
+      sanitize.text.function = function(x) gsub("_", "\\\\_", x))
+```
+
+
+```{r r interaction-table, echo=FALSE, message=FALSE, warning=FALSE, results='asis'}
+# Load the interaction analysis results (Printing for overleaf)
+interaction_analysis <- read.csv("Tables/KQ145/interaction_analysis.csv", stringsAsFactors = FALSE)
+
+# Format the data
+formatted_table <- interaction_analysis %>%
+  mutate(
+    term = case_when(
+      term == "PhageType" ~ "Phage Type",
+      term == "Temperature" ~ "Temperature",
+      term == "PhageType:Temperature" ~ "Phage × Temperature",
+      TRUE ~ term
+    ),
+    statistic = round(statistic, 2),
+    p.value = round(p.value, 4),
+    significance = case_when(
+      p.value < 0.001 ~ "***",
+      p.value < 0.01 ~ "**",
+      p.value < 0.05 ~ "*",
+      p.value < 0.1 ~ ".",
+      TRUE ~ "ns"
+    )
+  ) %>%
+  filter(term != "Residuals") %>%
+  select(Surface, term, statistic, p.value, significance) %>%
+  arrange(Surface, term)
+
+# Create and print xtable
+xtable_output <- xtable(formatted_table,
+                       caption = "Two-way ANOVA Results by Surface",
+                       align = c("l", "l", "l", "r", "r", "l"),
+                       digits = c(0, 0, 0, 2, 4, 0))
+
+print(xtable_output,
+      include.rownames = FALSE,
+      floating = TRUE,
+      latex.environments = "center",
+      caption.placement = "top",
+      sanitize.text.function = function(x) gsub("_", "\\\\_", x))
+```
+
