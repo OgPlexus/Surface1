@@ -1,0 +1,1427 @@
+---
+title: "Revisions_SurfacesCode"
+output: html_document
+date: "2026-05-13"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+# Load packages
+library(readr)      
+library(tidyverse)
+library(xtable)
+library(readxl)       
+library(dplyr)      
+library(ggplot2)     
+library(tidyr)       
+library(purrr)       
+library(stringr)     
+library(forcats)     
+library(broom)       
+library(knitr)       
+library(kableExtra)  
+library(ggpubr)
+library(rstatix)
+library(car) 
+library(scales) 
+library(mgcv)
+library(brms)
+library(effsize)
+library(patchwork)
+library(emmeans)
+```
+
+```{r}
+# Load processed data
+reproduction <- readRDS("reproduction.rds") # Reproduction/growth
+surfaces <- readRDS("surfaces.rds") # Survival 
+merged_data <- readRDS("merged_data.rds")
+```
+
+
+```{r}
+#function to create data structure overview
+create_data_overview <- function(data, dataset_name) {
+  data.frame(
+    Variable = names(data),
+    Type = sapply(data, class)
+  ) %>%
+    kable(caption = dataset_name) %>%
+    kable_styling(full_width = FALSE, 
+                  bootstrap_options = "striped",
+                  position = "left")
+}
+
+# Show structure of both datasets
+create_data_overview(reproduction, "Reproduction Dataset Structure")
+create_data_overview(surfaces, "Surfaces Dataset Structure")
+```
+
+
+```{r}
+
+#Phage survival across different surfaces
+#Figure S1: Changes in survival rates for T4 and PhiX174 over time on different surfaces.
+
+#Define custom colors
+custom_colors <- c("Control" = "#1f77b4",
+                   "Copper" = "#ff7f0e",
+                   "Plastic" = "#2ca02c",
+                   "Steel" = "#9932CC")
+
+phagesurvivalPlot <- ggplot(surfaces, aes(x = Time, y = log10(VirusTiter), color = Surface, shape = Surface)) +
+  geom_point(size = 3, alpha = 0.7) +
+  geom_line(aes(group = interaction(Surface, Experiment)), alpha = 0.3) +
+  facet_grid(PhageType ~ Temperature, scales = "free_y",
+             labeller = labeller(Temperature = function(x) paste0(x, "C"))) +
+  scale_color_manual(values = custom_colors) +
+  scale_shape_manual(values = c(16, 17, 15, 18)) +
+  labs(#title = "Phage Survival on Different Surfaces and Temperatures",
+       x = "Time (hours)",
+       y = expression(log[10]~"Virus Titer"),
+       color = "Surface",
+       shape = "Surface") +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 16),
+    strip.text = element_text(face = "bold", size = 12),
+    legend.position = "bottom",
+    legend.box = "horizontal",
+    panel.grid.minor = element_blank(),
+    panel.border = element_rect(color = "grey80", fill = NA),
+    axis.text = element_text(color = "black"),
+    axis.title = element_text(face = "bold")
+  ) +
+  guides(color = guide_legend(nrow = 1, override.aes = list(size = 4, alpha = 1)),
+         shape = guide_legend(nrow = 1, override.aes = list(size = 4, alpha = 1)))
+
+#Saving the plot
+png("PhageSurvivalPlot.png", width=6, height=4, units="in", res=300)
+print(phagesurvivalPlot)
+dev.off() #png form
+
+ggsave("PhageSurvivalPlot.pdf", plot = phagesurvivalPlot, width = 6, height = 4, units = "in") #pdf form
+```
+
+```{r}
+#Non-parametric tests
+# Non-parametric analysis
+# Calculate survival rate relative to initial titer (time 0)
+survival_data <- surfaces %>%
+  group_by(Experiment, PhageType, Temperature, Surface) %>%
+  mutate(
+    InitialTiter = VirusTiter[Time == 0],
+    SurvivalRate = VirusTiter / InitialTiter * 100
+  ) %>%
+  ungroup()
+
+# Function to check normality and homogeneity of variance
+check_assumptions <- function(data, surface) {
+  filtered_data <- data %>%
+    filter(Surface == surface, Time == 8)  # Looking at final timepoint
+  
+  # Shapiro test for each group with error handling
+  normality_tests <- filtered_data %>%
+    group_by(PhageType, Temperature) %>%
+    summarise(
+      n = n(),
+      mean = mean(SurvivalRate),
+      sd = sd(SurvivalRate),
+      shapiro_p = tryCatch(
+        shapiro.test(SurvivalRate)$p.value,
+        error = function(e) NA
+      )
+    ) %>%
+    mutate(
+      normality_status = case_when(
+        is.na(shapiro_p) & sd == 0 ~ "Constant values",
+        is.na(shapiro_p) ~ "Test failed",
+        shapiro_p > 0.05 ~ "Normal",
+        TRUE ~ "Non-normal"
+      )
+    )
+    # Levene's test with error handling
+  levene_result <- tryCatch(
+    car::leveneTest(SurvivalRate ~ interaction(PhageType, Temperature), 
+                    data = filtered_data),
+    error = function(e) "Levene's test failed - likely due to constant values"
+  )
+  
+  list(normality = normality_tests, variance = levene_result)
+}
+
+write.csv(survival_data, "survival_data.csv", row.names = FALSE)
+```
+
+
+```{r}
+# Function for non-parametric analysis
+analyze_surface <- function(data, surface_name) {
+  surface_data <- data %>%
+    filter(Surface == surface_name, Time == 8)  # Analysis at final timepoint
+  
+  # Kruskal-Wallis test for each factor
+  kw_phage <- kruskal.test(SurvivalRate ~ PhageType, data = surface_data)
+  kw_temp <- kruskal.test(SurvivalRate ~ Temperature, data = surface_data)
+  
+  # Wilcoxon rank sum tests for pairwise comparisons
+  pairwise_phage <- pairwise.wilcox.test(
+    surface_data$SurvivalRate,
+    interaction(surface_data$PhageType, surface_data$Temperature),
+    p.adjust.method = "bonferroni"
+  )
+  
+  list(
+    kw_phage = kw_phage,
+    kw_temp = kw_temp,
+    pairwise = pairwise_phage
+  )
+}
+
+# Check assumptions for each surface
+surfaces_list <- unique(surfaces$Surface)
+assumption_results <- lapply(surfaces_list, function(s) check_assumptions(survival_data, s))
+names(assumption_results) <- surfaces_list
+```
+
+
+```{r}
+
+# Create visualization of survival curves
+create_survival_plot <- function(data, surface_name) {
+  ggplot(data %>% filter(Surface == surface_name), 
+         aes(x = Time, y = SurvivalRate + 0.01,  
+             color = interaction(PhageType, Temperature, sep = " "),
+             shape = interaction(PhageType, Temperature, sep = " "))) +
+    stat_summary(fun = mean, geom = "point", size = 2) +
+    stat_summary(fun = mean, geom = "line") +
+    stat_summary(fun.data = mean_se, geom = "errorbar", width = 0.2) +
+    scale_y_log10(labels = scales::label_number()) +
+    labs(
+      x = "Time (hours)", 
+      y = "Survival Rate (%)", 
+      color = "Phage Type & Temperature",
+      shape = "Phage Type & Temperature"
+    ) +
+    theme_pubr() +
+    ggtitle(paste("Virus Survival Rate on", surface_name)) +
+    theme(legend.position = "right")
+}
+
+#Saving the plot
+png("SurvivalPlot.png", width=6, height=4, units="in", res=300)
+print(create_survival_plot)
+dev.off() #png form
+# Create plots for each surface
+survival_plots <- lapply(surfaces_list, function(s) create_survival_plot(survival_data, s))
+names(survival_plots) <- surfaces_list
+
+# Perform analysis for each surface
+statistical_results <- lapply(surfaces_list, function(s) analyze_surface(survival_data, s))
+names(statistical_results) <- surfaces_list
+
+# Print results for inspection
+print("Assumption check results:")
+print(assumption_results)
+
+print("Statistical analysis results:")
+print(statistical_results)
+
+
+#Table S4 Kruskal--Wallis .
+```
+
+
+```{r}
+# Create summary statistics table
+survival_summary <- survival_data %>%
+  group_by(Surface, PhageType, Temperature) %>%
+  summarise(
+    Initial_Titer = mean(VirusTiter[Time == 0]),
+    Final_Titer = mean(VirusTiter[Time == 8]),
+    Survival_Rate = mean(SurvivalRate[Time == 8]),
+    SD = sd(SurvivalRate[Time == 8])
+  ) %>%
+  arrange(Surface, Temperature, PhageType)
+
+# Create formatted table
+survival_table <- survival_summary %>%
+  mutate(
+    Initial_Titer = formatC(Initial_Titer, format = "e", digits = 2),
+    Final_Titer = formatC(Final_Titer, format = "e", digits = 2),
+    Survival_Rate = round(Survival_Rate, 2),
+    SD = round(SD, 2)
+  ) %>%
+  kable(
+    caption = "Summary of Virus Survival Rates by Surface and Temperature",
+    col.names = c("Surface", "Phage", "Temp (°C)", 
+                  "Initial Titer", "Final Titer", 
+                  "Survival Rate (%)", "SD"),
+    format = "html"
+  ) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+                full_width = FALSE) %>%
+  group_rows(index = table(survival_summary$Surface))
+
+#Table S2 Summary of virus survival rates.
+```
+
+```{r}
+#Reviewer 2: Convert table into figure
+
+#Figure 3: Survival rates at final time-points.
+
+# Ensure factor ordering matches the table (Control, Copper, Plastic, Steel)
+# and phage labels use the Greek phi.
+plot_data <- survival_summary %>%
+  mutate(
+    Surface     = factor(Surface, levels = c("Control", "Copper", "Plastic", "Steel")),
+    PhageType   = factor(PhageType,
+                         levels = c("PhiX174", "T4"),
+                         labels = c("φX174", "T4")),  
+    Temperature = factor(Temperature,
+                         levels = c(4, 37),
+                         labels = c("4 °C", "37 °C"))
+  )
+
+#Grouped bar chart with SD error bars
+
+fig_bar <- ggplot(plot_data,
+                  aes(x = Surface, y = Survival_Rate,
+                      fill = PhageType)) +
+  geom_col(position = position_dodge(width = 0.8),
+           width = 0.7, colour = "black", linewidth = 0.3) +
+  geom_errorbar(aes(ymin = pmax(Survival_Rate - SD, 0),
+                    ymax = pmin(Survival_Rate + SD, 100)),
+                position = position_dodge(width = 0.8),
+                width = 0.25, linewidth = 0.4) +
+  geom_text(aes(label = sprintf("%.1f", Survival_Rate),
+                y = pmin(Survival_Rate + SD, 100) + 3),
+            position = position_dodge(width = 0.8),
+            size = 3) +
+  facet_wrap(~ Temperature) +
+  scale_fill_manual(values = c("φX174" = "#4C8DBF",
+                               "T4"        = "#D9534F")) +
+  scale_y_continuous(limits = c(0, 110),
+                     breaks = seq(0, 100, 20),
+                     expand = expansion(mult = c(0, 0.02))) +
+  labs(x = "Surface",
+       y = "Survival rate at 8 h (%)",
+       fill = "Phage") +
+  theme_bw(base_size = 12) +
+  theme(panel.grid.major.x = element_blank(),
+        panel.grid.minor   = element_blank(),
+        strip.background   = element_rect(fill = "grey92", colour = NA),
+        legend.position    = "top")
+
+ggsave("Figure_survival_summary_bar.pdf", fig_bar, width = 8, height = 4.5)
+ggsave("Figure_survival_summary_bar.png", fig_bar, width = 8, height = 4.5, dpi = 300)
+
+```
+
+
+```{r}
+# Calculate rate of decline for each condition
+rate_analysis <- survival_data %>%
+  group_by(Surface, PhageType, Temperature, Experiment) %>%
+  do(model = lm(log10(SurvivalRate + 0.01) ~ Time, data = .)) %>%
+  mutate(
+    slope = coef(model)[2],
+    r_squared = summary(model)$r.squared,
+    p_value = summary(model)$coefficients[2,4]
+  ) %>%
+  ungroup() %>%
+  group_by(Surface, PhageType, Temperature) %>%
+  summarise(
+    mean_slope = mean(slope),
+    sd_slope = sd(slope),
+    mean_r2 = mean(r_squared),
+    n = n()
+  ) %>%
+  mutate(
+    half_life = -log(2)/(mean_slope * log(10)),
+    decline_rate_per_hour = -(1 - 10^mean_slope) * 100
+  )
+```
+
+
+```{r}
+# Create formatted table of decline rates
+decline_table <- rate_analysis %>%
+  mutate(
+    mean_slope = round(mean_slope, 4),
+    sd_slope = round(sd_slope, 4),
+    mean_r2 = round(mean_r2, 3),
+    half_life = round(half_life, 2),
+    decline_rate_per_hour = round(decline_rate_per_hour, 2)
+  ) %>%
+  arrange(Surface, Temperature, PhageType) %>%
+  kable(
+    caption = "Rate of Decline Analysis by Surface, Temperature, and Phage Type",
+    col.names = c("Surface", "Phage", "Temp (°C)", 
+                  "Log10 Slope", "Slope SD", "R²",
+                  "n", "Half-life (h)", "Decline Rate (%/h)"),
+    format = "html"
+  ) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+                full_width = FALSE) %>%
+  group_rows(index = table(rate_analysis$Surface))
+
+# Display results
+print(decline_table)
+```
+
+
+```{r}
+#Reviwer comment:
+#Run the two factorial model instead: Throughout the entire manuscript, the authors state that their analyses reveal interactions between environmental variables (E×E), i.e., surface type × temperature interactions, and they argue that these interactions are phage-dependent (e.g., in line 181 they mention “virus type by environment interactions”, G×E). I am not sure that the statistical analyses they performed are most appropriate for quantifying these interactions. Why were separate tests performed for each surface, with phage type and temperature as the variables? It would seem appropriate to instead fit a model linking SurvivalRate to all three variables (phage type, surface type, and temperature) as the independent variables. My understanding is that the authors should have enough data for such a model to converge:  
+
+#SurvivalRate = 𝛼 + 𝜏 Phage + 𝜃 Surface + 𝛾 Temperature + (𝜏𝜃) Phage × Surface + (𝜏𝛾) Phage × Temperature 
+
+#+ (𝜃𝛾) Surface × Temperature + (𝜏𝜃𝛾) Phage × Surface × Temperature + 𝜀  
+
+#(In the equation above, note that I’m using notation similar to that in equation 2 of the manuscript, even if it is somewhat non-standard). In my view, this model would provide a more clear and direct quantification of E×E, G×E, and G×E×E interactions.  
+
+# DATA: final timepoint only
+final_data <- survival_data %>%
+  filter(Time == 8) %>%
+  mutate(
+    PhageType    = factor(PhageType),
+    Surface      = factor(Surface),
+    Temperature  = factor(Temperature)
+  )
+
+
+# FULL FACTORIAL MODEL
+# SurvivalRate ~ Phage * Surface * Temperature
+
+final_data <- survival_data %>%
+  filter(Time == 8) %>%
+  mutate(
+    PhageType   = factor(PhageType),
+    Surface     = factor(Surface),
+    Temperature = factor(Temperature)
+  )
+
+fit_full <- lm(SurvivalRate ~ PhageType * Surface * Temperature,
+               data = final_data)
+
+anova_full <- Anova(fit_full, type = 3)
+```
+
+
+```{r}
+#Build a table for the results of the model and ANOVA
+fmt_p <- function(p) {
+  ifelse(is.na(p), NA_character_,
+         ifelse(p < 0.001, "< 0.001",
+                sprintf("%.3f", p)))
+}
+
+# Format table
+fmt_p <- function(p) {
+  ifelse(is.na(p), NA_character_,
+         ifelse(p < 0.001, "< 0.001",
+                sprintf("%.3f", p)))
+}
+
+# build table
+tab_pub <- broom::tidy(anova_full) %>%
+  filter(term != "(Intercept)", term != "Residuals") %>%
+  mutate(
+    Effect = case_when(
+      term == "PhageType" ~ "Phage",
+      term == "Surface" ~ "Surface",
+      term == "Temperature" ~ "Temperature",
+      term == "PhageType:Surface" ~ "Phage $\\times$ Surface",
+      term == "PhageType:Temperature" ~ "Phage $\\times$ Temperature",
+      term == "Surface:Temperature" ~ "Surface $\\times$ Temperature",
+      term == "PhageType:Surface:Temperature" ~ "Phage $\\times$ Surface $\\times$ Temperature",
+      TRUE ~ term
+    ),
+    df1 = df,
+    df2 = fit_full$df.residual,
+    `F(df1, df2)` = sprintf("F(%d, %d) = %.2f", df1, df2, statistic),
+    `p-value` = fmt_p(p.value)
+  ) %>%
+  select(Effect, `F(df1, df2)`, `p-value`)
+
+latex_code <- knitr::kable(
+  tab_pub,
+  format = "latex",
+  booktabs = TRUE,
+  escape = FALSE,
+  caption = "Type III ANOVA for survival rate at the final timepoint (Time = 8) from the full factorial model: SurvivalRate $\\sim$ Phage $\\times$ Surface $\\times$ Temperature.",
+  label = "tab:anova_survival_full"
+)
+
+cat(latex_code)
+```
+
+```{r}
+
+# Set emmeans options so CIs are 95% and p-values use Tukey adjustment
+emm_options(opt.digits = FALSE)
+
+# ESTIMATED MARGINAL MEANS (every factor combination)
+
+# Reports the model-estimated mean survival rate for each
+# Phage x Surface x Temperature cell, with 95% CIs.
+
+emm_all <- emmeans(fit_full, ~ PhageType * Surface * Temperature)
+
+emm_all_df <- as.data.frame(emm_all) %>%
+  rename(EMM = emmean, SE = SE, df = df,
+         lower.CI = lower.CL, upper.CI = upper.CL) %>%
+  mutate(
+    lower.CI = pmax(lower.CI, 0),       
+    upper.CI = pmin(upper.CI, 100),    
+    across(c(EMM, SE, lower.CI, upper.CI), ~ round(.x, 3))
+  )
+
+# Table for supplementary
+emm_all_table <- emm_all_df %>%
+  kable(caption = "Supplementary Table SX. Estimated marginal means (EMMs) of survival rate at the final timepoint for each Phage x Surface x Temperature combination, with 95% confidence intervals.",
+        booktabs = TRUE) %>%
+  kable_styling(latex_options = c("hold_position", "scale_down"))
+
+print(emm_all_table)
+```
+
+
+```{r}
+# 1. Data frames as CSV in Tables
+dir.create("Tables", showWarnings = FALSE)
+write.csv(survival_summary, "Tables/survival_summary.csv", row.names = FALSE)
+write.csv(rate_analysis, "Tables/rate_analysis.csv", row.names = FALSE)
+
+
+# 2. Lists or printed results as TXT 
+assumption_text <- capture.output(print(assumption_results))
+writeLines(assumption_text, "Tables/assumption_results.txt")
+
+statistical_text <- capture.output(print(statistical_results))
+writeLines(statistical_text, "Tables/statistical_results.txt")
+
+decline_table_text <- capture.output(print(decline_table))
+writeLines(decline_table_text, "Tables/decline_table.txt")
+
+survival_table_text <- capture.output(print(survival_table))
+writeLines(survival_table_text, "Tables/survival_table.txt")
+```
+
+```{r}
+
+#Figure 2: Phage survival across surfaces.
+
+#Plot Survival rates (a)
+
+# Survival rate separate figure
+df <- read.csv("Tables/survival_summary.csv")
+df <- df %>% 
+  filter(!grepl("control", Surface, ignore.case = FALSE))
+df <- df %>%
+  mutate(Surface_Temp = paste(Surface, paste0(Temperature, "°C")))
+df <- df %>%
+  mutate(Surface_Temp = factor(Surface_Temp,
+    levels = df %>%
+      arrange(Surface, Temperature) %>%
+      distinct(Surface_Temp) %>%
+      pull(Surface_Temp)
+  ))
+
+
+theme_nature <- theme_bw(base_size = 14, base_family = "Helvetica") +
+  theme(
+    panel.grid = element_blank(),
+    panel.border = element_blank(),
+    axis.line = element_line(color = "black", linewidth = 0.9),
+    axis.ticks = element_line(color = "black", linewidth = 0.6),
+    legend.title = element_blank(),
+    legend.text = element_text(size = 12),
+    legend.key.width = unit(1.8, "cm"),   
+    legend.key.height = unit(0.5, "cm"),  
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 11),
+    axis.text.y = element_text(size = 11),
+    plot.title = element_text(face = "bold", hjust = 0.5, size = 14),
+    legend.position = "top",
+    legend.justification = "center",
+    legend.box = "horizontal"
+  )
+
+
+line_types <- c("solid", "dashed")
+names(line_types) <- unique(df$PhageType)
+
+phage_colors <- c("PhiX174" = "black", "T4" = "black")
+
+pd <- position_dodge(width = 0.4)
+
+SurvivalratePlot <- ggplot(df, aes(
+  x = Surface_Temp,
+  y = Survival_Rate,
+  shape = PhageType
+)) +
+  geom_point(
+    position = pd,
+    size = 2,
+    color = "black"
+  ) +
+  geom_errorbar(
+    aes(ymin = Survival_Rate - SD,
+        ymax = Survival_Rate + SD),
+    width = 0.2,
+    position = pd,
+    linewidth = 0.8
+  ) +
+  scale_shape_manual(
+    values = c(
+      "PhiX174" = 16,  # solid circle
+      "T4" = 17        # solid triangle
+    ),
+    labels = c(
+      "PhiX174" = expression(phi * "X174"),
+      "T4" = "T4"
+    ),
+    name = "Phage Type"
+  ) +
+  labs(
+    x = "Environment (Surface × Temperature)",
+    y = "Survival rate (%)",
+    title = "Survival Rate"
+  ) +
+  theme_nature
+SurvivalratePlot
+
+
+ ggsave("SurvivalRatePlot.png", SurvivalratePlot, width = 7, height = 5, dpi = 600)
+```
+
+
+```{r}
+
+# Reviewer: Fig 2. It is not possible to differentiate between the symbols for X174 and T4 (i.e. the circle and triangle) for many points the figure, especially when there are small error bars (see 2b Steel 4C, for example). Please correct.
+#Add color to show differences
+
+#Plot Survival rates (a)
+# Survival rate separate figure
+
+df <- read.csv("Tables/survival_summary.csv")
+df <- df %>% 
+  filter(!grepl("control", Surface, ignore.case = FALSE))
+df <- df %>%
+  mutate(Surface_Temp = paste(Surface, paste0(Temperature, "°C")))
+df <- df %>%
+  mutate(Surface_Temp = factor(Surface_Temp,
+    levels = df %>%
+      arrange(Surface, Temperature) %>%
+      distinct(Surface_Temp) %>%
+      pull(Surface_Temp)
+  ))
+
+
+theme_nature <- theme_bw(base_size = 14, base_family = "Helvetica") +
+  theme(
+    panel.grid = element_blank(),
+    panel.border = element_blank(),
+    axis.line = element_line(color = "black", linewidth = 0.9),
+    axis.ticks = element_line(color = "black", linewidth = 0.6),
+    legend.title = element_blank(),
+    legend.text = element_text(size = 12),
+    legend.key = element_blank(),
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 11),
+    axis.text.y = element_text(size = 11),
+    plot.title = element_text(face = "bold", hjust = 0.5, size = 14),
+    legend.position = "top",
+    legend.justification = "center"
+  )
+
+phage_colors <- c("PhiX174" = "#1b7837", "T4" = "#762a83")
+pd <- position_dodge(width = 0.4)
+
+SurvivalratePlot <- ggplot(df, aes(
+  x = Surface_Temp,
+  y = Survival_Rate,
+  shape = PhageType,
+  color = PhageType
+)) +
+  geom_point(position = pd, size = 2.5) +
+  geom_errorbar(
+    aes(ymin = Survival_Rate - SD, ymax = Survival_Rate + SD),
+    width = 0.2, position = pd, linewidth = 0.8
+  ) +
+  scale_shape_manual(
+    values = c("PhiX174" = 16, "T4" = 17),
+    labels = c("PhiX174" = expression(phi * "X174"), "T4" = "T4")
+  ) +
+  scale_color_manual(
+    values = phage_colors,
+    labels = c("PhiX174" = expression(phi * "X174"), "T4" = "T4")
+  ) +
+  guides(shape = guide_legend(override.aes = list(size = 3, linetype = 0))) +
+  labs(
+    x = "Environment (Surface × Temperature)",
+    y = "Survival rate (%)",
+    title = "Survival Rate"
+  ) +
+  theme_nature
+
+SurvivalratePlot
+
+
+ ggsave("SurvivalRatePlot.png", SurvivalratePlot, width = 7, height = 5, dpi = 600)
+```
+
+
+```{r}
+
+#Decline rate figure without connecting lines and with error bars
+
+# Load + prep (same as half-life)
+df <- read.csv("Tables/rate_analysis.csv") %>%
+  filter(!grepl("control", Surface, ignore.case = TRUE)) %>%
+  mutate(
+    PhageType = factor(PhageType),
+    Surface_Temp = paste(Surface, paste0(Temperature, "°C"))
+  ) %>%
+  mutate(
+    Surface_Temp = factor(
+      Surface_Temp,
+      levels = df %>% arrange(Surface, Temperature) %>% distinct(Surface_Temp) %>% pull(Surface_Temp)
+    )
+  )
+
+# Decline rate error bars based on slope ± SD (propagated)
+df_plot_decline <- df %>%
+  mutate(
+    slope_mean = mean_slope,
+    slope_low  = mean_slope - sd_slope,
+    slope_high = mean_slope + sd_slope,
+
+    decline_mean = -(1 - 10^slope_mean) * 100,
+    decline_low  = -(1 - 10^slope_low)  * 100,
+    decline_high = -(1 - 10^slope_high) * 100,
+
+    decline_lwr = pmin(decline_low, decline_high),
+    decline_upr = pmax(decline_low, decline_high)
+  )
+
+pd <- position_dodge(width = 0.4)
+
+declineRate_plot <- ggplot(df_plot_decline, aes(
+  x = Surface_Temp,
+  y = decline_mean,
+  shape = PhageType,
+  color = PhageType        
+)) +
+  geom_errorbar(
+    aes(ymin = decline_lwr, ymax = decline_upr),
+    width = 0.20,
+    position = pd,
+    linewidth = 1.0
+                          
+  ) +
+  geom_point(
+    position = pd,
+    size = 2
+                            
+  ) +
+  scale_shape_manual(
+    values = c("PhiX174" = 16, "T4" = 17),
+    labels = c("PhiX174" = expression(phi * "X174"), "T4" = "T4"),
+    name = "Phage Type"
+  ) +
+  scale_color_manual(        
+    values = c("PhiX174" = "#1b7837", "T4" = "#762a83"),
+    labels = c("PhiX174" = expression(phi * "X174"), "T4" = "T4"),
+    name = "Phage Type"
+  ) +
+  guides(shape = guide_legend(override.aes = list(size = 3, linetype = 0))) +
+  labs(
+    x = "Environment (Surface × Temperature)",
+    y = "Decline rate (per hour)",
+    title = "Decline rate"
+  ) +
+  theme_nature
+
+declineRate_plot
+
+
+ ggsave("DeclineRate.png", declineRate_plot, width = 7, height = 5, dpi = 600)
+```
+
+```{r}
+
+#Half life plot with error bars
+df <- read.csv("Tables/rate_analysis.csv") %>%
+  filter(!grepl("control", Surface, ignore.case = TRUE)) %>%
+  mutate(
+    PhageType = factor(PhageType),
+    Surface_Temp = paste(Surface, paste0(Temperature, "°C"))
+  )
+
+df <- df %>%
+  mutate(
+    Surface_Temp = factor(
+      Surface_Temp,
+      levels = df %>% arrange(Surface, Temperature) %>% distinct(Surface_Temp) %>% pull(Surface_Temp)
+    )
+  )
+
+# Convert mean_slope ± sd_slope into half-life bounds (±1 SD on k)
+ln2 <- log(2)
+
+df_plot <- df %>%
+  mutate(
+    k_mean = -mean_slope,
+    k_low  = pmax(k_mean - sd_slope, 1e-12),  
+    k_high = k_mean + sd_slope,
+    half_life_mean = ln2 / k_mean,
+    half_life_low  = ln2 / k_high,  
+    half_life_high = ln2 / k_low   
+  )
+
+
+pd <- position_dodge(width = 0.4)
+
+Half_Life2 <- ggplot(df_plot, aes(
+  x = Surface_Temp,
+  y = half_life_mean,
+  shape = PhageType,
+  color = PhageType         
+)) +
+  geom_errorbar(
+    aes(ymin = half_life_low, ymax = half_life_high),
+    width = 0.20,
+    position = pd,
+    linewidth = 1.0
+                            
+  ) +
+  geom_point(
+    position = pd,
+    size = 3
+                            
+  ) +
+  scale_shape_manual(
+    values = c("PhiX174" = 16, "T4" = 17),
+    labels = c("PhiX174" = expression(phi * "X174"), "T4" = "T4"),
+    name = "Phage Type"
+  ) +
+  scale_color_manual(        
+    values = c("PhiX174" = "#1b7837", "T4" = "#762a83"),
+    labels = c("PhiX174" = expression(phi * "X174"), "T4" = "T4"),
+    name = "Phage Type"
+  ) +
+  guides(shape = guide_legend(override.aes = list(size = 3, linetype = 0))) +
+  labs(
+    x = "Environment (Surface × Temperature)",
+    y = "Half-life (hours)",
+    title = "Half-life"
+  ) +
+  theme_nature
+
+Half_Life2
+
+
+ ggsave("Halflives.png", Half_Life2, width = 7, height = 5, dpi = 600)
+```
+
+```{r}
+#Differences in growth rates
+
+#Effect of surface and temperature on reproduction 
+
+# Data preparation and initial analysis
+
+reproduction_analysis <- reproduction %>%
+  group_by(PhageType, Surface, InactivationTemp, InactivationTimeHours) %>%
+  arrange(ReproductionTimeMinutes) %>%
+  mutate(
+    # Calculate normalized titer (relative to starting point)
+    NormalizedTiter = VirusTiter / first(VirusTiter),
+    # Calculate growth rate between timepoints
+    GrowthRate = case_when(
+      ReproductionTimeMinutes > 0 ~ (VirusTiter - first(VirusTiter)) / ReproductionTimeMinutes,
+      TRUE ~ 0
+    ),
+    # Calculate log-transformed titer for easier visualization
+    LogTiter = log10(VirusTiter + 1)
+  ) %>%
+  ungroup()
+```
+
+
+
+```{r}
+#Remake figure - normalized growth plot
+
+#Figure S2: T4 and PhiX174 growth after exposure to surfaces and temperatures
+
+calc_se <- function(x) sd(x, na.rm = TRUE) / sqrt(sum(!is.na(x)))
+
+library(scales)
+
+LOD <- 1   # limit of detection (PFU/mL)
+growth_plot <- reproduction_analysis %>%
+  filter(InactivationTimeHours == 0) %>%
+  group_by(PhageType, Surface, InactivationTemp, ReproductionTimeMinutes) %>%
+  summarise(
+    MeanTiter = mean(VirusTiter, na.rm = TRUE),
+    .groups   = "drop"
+  ) %>%
+  mutate(MeanTiter_plot = pmax(MeanTiter, LOD / 2)) %>%
+  ggplot(aes(x = ReproductionTimeMinutes,
+             y = MeanTiter_plot,
+             color = PhageType,
+             group = PhageType)) +
+  geom_line(linewidth = 0.5) +
+  geom_point() +
+  scale_y_log10(
+    labels = scientific,
+    expand = expansion(mult = c(0.02, 0.05))
+  ) +
+  facet_grid(InactivationTemp ~ Surface,
+             labeller = labeller(InactivationTemp = function(x) paste0(x, " °C"))) +
+  theme_pubr() +
+  labs(
+    x = "Time (minutes)",
+    y = "Virus Titer (PFU/mL)"
+  ) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+ggsave("growth_plotLOD.png", growth_plot, width = 9, height = 5, dpi = 300)
+
+```
+
+
+
+
+```{r}
+# Normalization
+# Substitute below-LOD baseline values with LOD/2 to avoid Inf values
+# When computing fold-change (Titer / baseline).
+#  Adjust the group_by keys to match your replicate structure.
+
+LOD <- 1  
+
+reproduction_analysis <- reproduction_analysis %>%
+  group_by(PhageType, Surface, InactivationTemp, InactivationTimeHours) %>%
+  mutate(
+    VirusTiter_adj  = ifelse(is.na(VirusTiter) | VirusTiter < LOD, LOD/2, VirusTiter),
+    baseline_adj    = VirusTiter_adj[ReproductionTimeMinutes == 0],
+    NormalizedTiter = VirusTiter_adj / baseline_adj
+  ) %>%
+  ungroup()
+
+# Max-normalize each time-course (Phage x Surface x Temperature) to its own peak titer. Each curve will run from a low value to 1.0.
+
+plot_summary <- reproduction_analysis %>%
+  filter(InactivationTimeHours == 0) %>%
+  group_by(PhageType, Surface, InactivationTemp) %>%
+  mutate(
+    PeakTiter            = max(VirusTiter, na.rm = TRUE),
+    NormalizedTiter      = VirusTiter / PeakTiter
+  ) %>%
+  ungroup() %>%
+  group_by(PhageType, Surface, InactivationTemp, ReproductionTimeMinutes) %>%
+  summarise(
+    MeanNorm = mean(NormalizedTiter, na.rm = TRUE),
+    SE       = calc_se(NormalizedTiter),
+    .groups  = "drop"
+  )
+```
+
+
+
+
+```{r}
+
+# Plot normalized titer (fraction of peak) over reproduction time
+#Figure S3: Normalized growth dynamics.
+
+normalized_plot <- plot_summary %>%
+  ggplot(aes(x = ReproductionTimeMinutes,
+             y = MeanNorm,
+             color = PhageType,
+             group = PhageType)) +
+  geom_line(linewidth = 0.7) +
+  geom_point(size = 2) +
+  facet_grid(InactivationTemp ~ Surface,
+             labeller = labeller(InactivationTemp = function(x) paste0(x, " °C"))) +
+  scale_y_continuous(
+    limits = c(0, 1.1),
+    breaks = seq(0, 1, 0.2),
+    labels = scales::percent_format(accuracy = 1),
+    expand = expansion(mult = c(0.02, 0.02))
+  ) +
+  scale_x_continuous(breaks = c(0, 30, 40, 50, 60)) +
+  scale_color_manual(values = c("Phix" = "#E64B35", "T4" = "#4DBBD5")) +
+  labs(
+    x     = "Reproduction time (minutes)",
+    y     = "Normalized titer (% of peak)",
+    color = "Phage"
+  ) +
+  theme_pubr(base_size = 12) +
+  theme(
+    axis.text.x      = element_text(angle = 45, hjust = 1),
+    strip.background = element_rect(fill = "grey92", colour = NA),
+    legend.position  = "top",
+    plot.margin      = margin(t = 10, r = 10, b = 10, l = 10)
+  )
+
+print(normalized_plot)
+
+ggsave("reproduction_normalized.png", normalized_plot, width = 9, height = 5, dpi = 300)
+```
+
+
+```{r}
+#Final comparisons on normalized data
+final_comparison <- reproduction_analysis %>%
+  filter(ReproductionTimeMinutes == 60,
+         InactivationTimeHours == 0) %>%
+  group_by(Surface, InactivationTemp) %>%
+  summarise(
+    T4_Mean = mean(VirusTiter[PhageType == "T4"]),
+    Phix_Mean = mean(VirusTiter[PhageType == "Phix"]),
+    T4_SE = calc_se(VirusTiter[PhageType == "T4"]),
+    Phix_SE = calc_se(VirusTiter[PhageType == "Phix"]),
+    TiterRatio = T4_Mean / Phix_Mean,
+    LogFoldDifference = log2(TiterRatio),
+    .groups = 'drop'
+  )
+```
+
+
+```{r}
+# Growth phase analysis
+growth_phases <- reproduction_analysis %>%
+  filter(InactivationTimeHours == 0) %>%
+  group_by(PhageType, Surface, InactivationTemp) %>%
+  summarise(
+    EarlyGrowthRate = (VirusTiter[ReproductionTimeMinutes == 30] - VirusTiter[ReproductionTimeMinutes == 0]) / 30,
+    LateGrowthRate = (VirusTiter[ReproductionTimeMinutes == 60] - VirusTiter[ReproductionTimeMinutes == 30]) / 30,
+    .groups = 'drop'
+  ) %>%
+  pivot_wider(
+    names_from = PhageType,
+    values_from = c(EarlyGrowthRate, LateGrowthRate)
+  ) %>%
+  mutate(
+    EarlyGrowthRatio = EarlyGrowthRate_T4 / EarlyGrowthRate_Phix,
+    LateGrowthRatio = LateGrowthRate_T4 / LateGrowthRate_Phix
+  )
+```
+
+
+```{r}
+# Temperature sensitivity analysis
+temp_sensitivity <- reproduction_analysis %>%
+  filter(ReproductionTimeMinutes == 60,
+         InactivationTimeHours == 0) %>%
+  group_by(PhageType, Surface) %>%
+  summarise(
+    TempEffect = mean(VirusTiter[InactivationTemp == 37]) / mean(VirusTiter[InactivationTemp == 4]),
+    LogTempEffect = log2(TempEffect),
+    .groups = 'drop'
+  )
+```
+
+
+```{r}
+# Combine all metrics into final table
+final_table <- final_comparison %>%
+  left_join(growth_phases, by = c("Surface", "InactivationTemp")) %>%
+  select(Surface, InactivationTemp, TiterRatio, LogFoldDifference, EarlyGrowthRatio, LateGrowthRatio) %>%
+  arrange(Surface, InactivationTemp)
+
+#Print growth phases for overleaf
+
+#scientific notation
+sci_cols <- c("EarlyGrowthRate_Phix",
+              "EarlyGrowthRate_T4",
+              "LateGrowthRate_Phix",
+              "LateGrowthRate_T4")
+
+growth_sci <- growth_phases %>%
+  mutate(across(all_of(sci_cols),
+                ~ formatC(., format = "e", digits = 2)))
+# Create xtable
+growth_tab <- xtable(growth_sci)
+
+#Print
+
+print(
+  growth_tab,
+  include.rownames = FALSE,
+  booktabs = TRUE,
+  floating = FALSE,                 # <--- important
+  sanitize.text.function = identity
+)
+```
+```{r}
+#Summary stats for growth/reproduction data 
+#Prepare data for growth main graphs
+df <- reproduction
+pc <- 1
+
+df_summary <- df %>%
+  group_by(Surface, InactivationTemp, PhageType) %>%
+  summarise(
+    mean_log = mean(log10(VirusTiter + pc), na.rm = TRUE),
+    sd_log   = sd(log10(VirusTiter + pc), na.rm = TRUE),
+    n        = sum(!is.na(VirusTiter)),
+    se_log   = sd_log / sqrt(n),
+    ci_mult  = qt(0.975, df = n - 1),
+    lwr_log  = mean_log - ci_mult * se_log,
+    upr_log  = mean_log + ci_mult * se_log,
+    mean_rep = 10^mean_log - pc,
+    ymin     = pmax(10^lwr_log - pc, 1e-6),
+    ymax     = pmax(10^upr_log - pc, 1e-6),
+    .groups  = "drop"
+  ) %>%
+  mutate(
+    Surface_Temp = paste0(Surface, " ", InactivationTemp, "°C")
+  )
+```
+
+
+```{r}
+
+#Figure 4: PhiX174 and T4 growth dynamics after exposure to surface x temperature combinations.
+
+# Factor order
+surface_levels <- df_summary %>%
+  arrange(Surface, InactivationTemp) %>%
+  distinct(Surface_Temp) %>%
+  pull(Surface_Temp)
+
+df_summary <- df_summary %>%
+  mutate(Surface_Temp = factor(Surface_Temp, levels = surface_levels))
+
+df_phi <- df_summary %>% filter(PhageType == "Phix")
+df_t4  <- df_summary %>% filter(PhageType == "T4")
+
+theme_nature <- theme_bw(base_size = 14, base_family = "Helvetica") +
+  theme(
+    panel.grid = element_blank(),
+    panel.border = element_blank(),
+    axis.line = element_line(color = "black", linewidth = 0.9),
+    axis.ticks = element_line(color = "black", linewidth = 0.6),
+    legend.title = element_blank(),
+    legend.text = element_text(size = 12),
+    legend.key = element_blank(),
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 11),
+    axis.text.y = element_text(size = 11),
+    plot.title = element_text(face = "bold", hjust = 0.5, size = 14),
+    legend.position = "top",
+    legend.justification = "center"
+  )
+
+
+base_theme <- theme_nature +
+  theme(
+    axis.text.x  = element_text(angle = 45, hjust = 1, size = 10),
+    plot.title   = element_text(face = "plain", hjust = 0.5, size = 14),
+    axis.title.x = element_blank()
+  )
+
+p_phi <- ggplot(df_phi, aes(Surface_Temp, mean_rep)) +
+  geom_errorbar(aes(ymin = ymin, ymax = ymax),
+                width = 0.28, linewidth = 1.0, color = "black") +
+  geom_point(size = 2.8, color = "black") +
+  scale_y_log10() +
+  labs(
+    title = expression(phi * "X174: Growth after surface exposure"),
+    y     = expression("Mean titer (log"[10]*" PFU/mL)")
+  ) +
+  base_theme
+
+p_t4 <- ggplot(df_t4, aes(Surface_Temp, mean_rep)) +
+  geom_errorbar(aes(ymin = ymin, ymax = ymax),
+                width = 0.25, linewidth = 1.0, color = "black") +
+  geom_point(size = 2.8, color = "black") +
+  scale_y_log10() +
+  labs(
+    title = "T4: Growth after surface exposure",
+    y     = expression("Mean titer (log"[10]*" PFU/mL)"),
+    x     = "Surface and Temperature"
+  ) +
+  theme_nature +
+  theme(
+    axis.text.x = element_text(angle = 35, hjust = 1, size = 10),
+    plot.title  = element_text(face = "plain", hjust = 0.5, size = 14)
+  )
+
+p_stacked <- p_phi / p_t4 + plot_layout(heights = c(1, 1))
+
+
+ggsave("Growth_stacked_with_CI.png", p_stacked, width = 10, height = 8, dpi = 600)
+p_stacked
+```
+
+
+```{r}
+#Relationship between survival and growth
+df <- merged_data %>%
+  mutate(
+    PhageType = factor(PhageType),
+    Surface = factor(Surface),
+    Temperature = as.numeric(Temperature),
+    Time = as.numeric(Time),
+    ReproductionTimeMinutes = as.numeric(ReproductionTimeMinutes),
+    MeanSurfaceVirusTiter_surfaces = as.numeric(MeanSurfaceVirusTiter_surfaces),
+    VirusTiter = as.numeric(VirusTiter)
+  )
+
+#Correlate growth and survival at the summary level. Then compute survival at 8hr and final titer growth titer at 60 min per condition, then correlate across conditions.
+condition_summary <- df %>%
+  group_by(PhageType, Temperature, Surface) %>%
+  summarise(
+    final_survival      = mean(MeanSurfaceVirusTiter_surfaces[Time == 8],
+                               na.rm = TRUE),
+    final_reproduction  = mean(VirusTiter[ReproductionTimeMinutes == 60],
+                               na.rm = TRUE),
+    .groups = "drop"
+  )
+
+cor.test(condition_summary$final_survival,
+         condition_summary$final_reproduction,
+         method = "spearman")
+```
+
+
+```{r}
+# Aggregate to one survival + one growth value per
+#  (PhageType, Surface, Temperature, InactivationTimeHours).
+#  5 properly paired observations per cell.
+cell_pairs <- df %>%
+  group_by(PhageType, Surface, Temperature, Time) %>%
+  summarise(
+    survival_titer        = mean(MeanSurfaceVirusTiter_surfaces, na.rm = TRUE),
+    reproduction_final    = mean(VirusTiter[ReproductionTimeMinutes == 60],
+                                 na.rm = TRUE),
+    .groups = "drop"
+  )
+```
+
+
+
+```{r}
+#  Per-cell Spearman correlations (n = 5 per cell, pairing by inactivation time)
+
+spearman_per_cell1 <- cell_pairs %>%
+  group_by(PhageType, Surface, Temperature) %>%
+  summarise(
+    n          = n(),
+    cor_result = list(suppressWarnings(
+                   cor.test(survival_titer, reproduction_final,
+                            method = "spearman", exact = FALSE)
+                 )),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    rho     = map_dbl(cor_result, ~ .x$estimate),
+    p.value = map_dbl(cor_result, ~ .x$p.value),
+    sig     = case_when(
+      p.value < 0.001 ~ "***",
+      p.value < 0.01  ~ "**",
+      p.value < 0.05  ~ "*",
+      TRUE            ~ ""
+    )
+  ) %>%
+  select(-cor_result)
+
+print(spearman_per_cell1)
+```
+```{r}
+#Print for overleaf
+# Format data
+# Print for overleaf
+formatted_table <- spearman_per_cell1 %>%
+  mutate(
+    p.value = signif(p.value, 3),
+    rho     = round(rho, 3)
+  )
+
+# Create and print xtable
+xtable_output <- xtable(
+  formatted_table,
+  caption = "Spearman Correlation Results Between Survival and Single Growth Timepoint",
+  align   = c("l", "l", "l", "r", "r", "r", "r", "c"),
+  digits  = c(0, 0, 0, 0, 0, 3, 3, 0)
+)
+
+print(
+  xtable_output,
+  include.rownames      = FALSE,
+  floating              = TRUE,
+  latex.environments    = "center",
+  caption.placement     = "top",
+  sanitize.text.function = function(x) gsub("_", "\\\\_", x)
+)
+```
+
+
+```{r}
+# Overall correlation across all 16 conditions
+condition_summary <- cell_pairs %>%
+  group_by(PhageType, Surface, Temperature) %>%
+  summarise(
+    final_survival     = mean(survival_titer,     na.rm = TRUE),
+    final_reproduction = mean(reproduction_final, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+cor.test(condition_summary$final_survival,
+         condition_summary$final_reproduction,
+         method = "spearman", exact = FALSE)
+
+# Split by phage and  report two separate overall correlations
+condition_summary %>%
+  group_by(PhageType) %>%
+  summarise(
+    overall_rho     = cor(final_survival, final_reproduction, method = "spearman"),
+    overall_p_value = cor.test(final_survival, final_reproduction,
+                               method = "spearman", exact = FALSE)$p.value,
+    .groups = "drop"
+  )
+```
+
+
+
+```{r}
+
+LOD <- 1   # plaque assay limit of detection (PFU/mL)
+
+# Per-(Phage x Surface x Temperature x InactivationTime) summaries
+#    using ALL 5 reproduction timepoints. n = 5 paired obs per cell.
+cell_pairs <- df %>%
+  group_by(PhageType, Surface, Temperature,
+           Time, ReproductionTimeMinutes) %>%
+  summarise(
+    VirusTiter           = mean(VirusTiter, na.rm = TRUE),
+    SurvivalTiter        = mean(MeanSurfaceVirusTiter_surfaces, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  group_by(PhageType, Surface, Temperature, Time) %>%
+  arrange(ReproductionTimeMinutes, .by_group = TRUE) %>%
+  summarise(
+    survival_titer = first(SurvivalTiter),  # one value per IT_h
+
+    # Option A — geometric mean of titer across all 5 reproduction timepoints
+    reproduction_mean_log = mean(log10(pmax(VirusTiter, LOD / 2))),
+
+    .groups = "drop"
+  )
+```
+
+
+```{r}
+# Per-cell Spearman correlations (still n = 5, but the reproduction value
+#    now uses all 5 timepoints' worth of information)
+spearman_per_cell <- cell_pairs %>%
+  group_by(PhageType, Surface, Temperature) %>%
+  summarise(
+    n          = n(),
+    cor_result = list(suppressWarnings(
+                   cor.test(survival_titer, reproduction_mean_log,
+                            method = "spearman", exact = FALSE)
+                 )),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    rho     = map_dbl(cor_result, ~ .x$estimate),
+    p.value = map_dbl(cor_result, ~ .x$p.value),
+    sig     = case_when(
+      p.value < 0.001 ~ "***",
+      p.value < 0.01  ~ "**",
+      p.value < 0.05  ~ "*",
+      TRUE            ~ ""
+    )
+  ) %>%
+  select(-cor_result)
+
+print(spearman_per_cell, n = Inf)
+
+```
+
+
+```{r}
+#Print for overleaf
+# Format data
+# Print for overleaf
+formatted_table <- spearman_per_cell %>%
+  mutate(
+    p.value = signif(p.value, 3),
+    rho     = round(rho, 3)
+  )
+
+# Create and print xtable
+xtable_output <- xtable(
+  formatted_table,
+  caption = "Spearman Correlation Results Between Survival and Reproduction",
+  align   = c("l", "l", "l", "r", "r", "r", "r", "c"),
+  digits  = c(0, 0, 0, 0, 0, 3, 3, 0)
+)
+
+print(
+  xtable_output,
+  include.rownames      = FALSE,
+  floating              = TRUE,
+  latex.environments    = "center",
+  caption.placement     = "top",
+  sanitize.text.function = function(x) gsub("_", "\\\\_", x)
+)
+```
+
+
+```{r}
+
+#Figure 5: Relationship between survival and growth.
+#  Heatmap with rho values + significance stars
+
+spearman_plot <- spearman_per_cell %>%
+mutate(
+  Surface     = factor(Surface, levels = c("Control", "Copper", "Plastic", "Steel")),
+  Temperature = factor(Temperature, levels = c(4, 37),
+                       labels = c("4 °C", "37 °C")),
+  PhageType   = factor(PhageType,
+                       levels = c("PhiX174", "T4"),
+                       labels = c("φX174", "T4")),   # <-- add this line
+  label       = paste0(sprintf("%.2f", rho),
+                       ifelse(sig != "", paste0("\n", sig), ""))
+) %>%
+  ggplot(aes(x = Surface, y = Temperature, fill = rho)) +
+  geom_tile(colour = "white", linewidth = 0.5) +
+  geom_text(aes(label = label),
+            size = 4, fontface = "bold", colour = "black", lineheight = 0.9) +
+  facet_wrap(~ PhageType) +
+  scale_fill_gradient2(low = "#3B4CC0", mid = "white", high = "#B40426",
+                       midpoint = 0, limits = c(-1, 1),
+                       name = "Spearman ρ") +
+  labs(
+    title = "Relationship between survival and growth",
+    x     = "Surface",
+    y     = "Temperature"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    axis.text.x      = element_text(angle = 45, hjust = 1),
+    strip.background = element_rect(fill = "grey92", colour = NA),
+    strip.text       = element_text(face = "bold"),
+    plot.title       = element_text(hjust = 0.5, face = "bold"),
+    panel.grid       = element_blank()
+  )
+
+print(spearman_plot)
+
+#ggsave("Fig4_survival_reproduction_correlation.pdf", spearman_plot,
+      # width = 8, height = 4)
+ggsave("survival_reproduction_correlation.png", spearman_plot,
+       width = 8, height = 4, dpi = 300)
+```
+
